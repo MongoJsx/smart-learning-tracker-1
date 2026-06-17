@@ -1,0 +1,21 @@
+select * 
+from employee
+
+
+where empCode in('0001','0002','0007')
+
+
+select * 
+from employee
+
+
+where EmpSex='F' and salary<30000
+
+asc จากน้อยไปมาก
+desc จากมากไปน้อย
+
+select * 
+from employee
+
+where EmpSex='M'
+order by deptCode , salary desc

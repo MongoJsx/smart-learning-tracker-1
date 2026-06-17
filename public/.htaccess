@@ -1,0 +1,38 @@
+<IfModule mod_rewrite.c>
+    <IfModule mod_headers.c>
+        # ✅ Allow Google popup postMessage to work in modern browsers
+        Header set Cross-Origin-Opener-Policy "same-origin-allow-popups"
+    </IfModule>
+    <IfModule mod_negotiation.c>
+        Options -MultiViews -Indexes
+    </IfModule>
+
+    RewriteEngine On
+
+    # ✅ Handle Authorization Header (Bearer token)
+    RewriteCond %{HTTP:Authorization} .
+    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+    RewriteCond %{HTTP:Authorization} .
+    RewriteRule .* - [E=Authorization:%{HTTP:Authorization}]
+
+    # ✅ Allow CORS Preflight (OPTIONS) to reach Laravel
+    RewriteCond %{REQUEST_METHOD} OPTIONS
+    RewriteRule ^ index.php [L]
+
+    # ✅ Admin page route
+    RewriteRule ^admin/?$ admin.php [L,QSA]
+
+    # ✅ Admin login/logout routes
+    RewriteRule ^admin-login/?$ admin_login.php [L,QSA]
+    RewriteRule ^admin-logout/?$ admin_logout.php [L,QSA]
+
+    # Redirect Trailing Slashes If Not A Folder...
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteCond %{REQUEST_URI} (.+)/$
+    RewriteRule ^ %1 [L,R=301]
+
+    # Send Requests To Front Controller...
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteRule ^ index.php [L]
+</IfModule>
