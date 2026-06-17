@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Smart Learning Tracker
 
 Web application for tracking self-learning progress with AI-assisted summaries, quiz generation, and analytics. The project ships with a Laravel API backend and a React + Tailwind frontend.
@@ -103,3 +104,7 @@ smart-learning-tracker/
 - Support collaborative subjects (shared between users).
 - Add notifications/reminders using Laravel notifications + frontend toast system.
 - Expand test coverage (feature tests for API, component/unit tests for React UI).
+=======
+# smart-learning-tracker
+ระบบจัดการการเรียนรู้และติดตามความก้าวหน้าการเรียนด้วย AI
+>>>>>>> bfe51c4aae83c0eda72665b3792a78bd1c4ce489
