@@ -1606,17 +1606,18 @@ export const DashboardLayout = () => {
           </header>
 
           <div
-            className="mobile-topbar sticky top-0 z-40 mb-2 px-0 text-[color:var(--text)] backdrop-blur-xl lg:hidden"
-            style={{
-              borderColor: 'var(--border)',
-              background: 'color-mix(in srgb, var(--surface) 94%, transparent)',
-              boxShadow: 'var(--shadow-soft)'
-            }}
+            className="mobile-topbar mobile-topbar--minimal sticky top-0 z-40 mb-10 px-0 text-white lg:hidden"
           >
-              <div className="relative mx-auto max-w-4xl px-5 pb-4 pt-10" ref={mobileMenuRef}>
+              <div className="relative mx-auto max-w-4xl px-5 pb-2 pt-[max(0.75rem,env(safe-area-inset-top))]" ref={mobileMenuRef}>
                 <div className="flex items-center justify-between gap-3">
-                  <div className="flex min-w-0 items-center gap-3">
-                    <div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-full bg-[color:var(--accent)] text-sm font-bold text-white shadow-sm">
+                  <div
+                    className="flex min-w-0 items-center gap-2.5 rounded-full py-1.5 pl-1.5 pr-3 shadow-sm"
+                    style={{ background: '#ffffff' }}
+                  >
+                    <div
+                      className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full text-sm font-bold text-white"
+                      style={{ background: '#07152f' }}
+                    >
                       {profileImageUrl ? (
                         <img
                           src={profileImageUrl}
@@ -1629,10 +1630,10 @@ export const DashboardLayout = () => {
                       )}
                     </div>
                     <div className="min-w-0">
-                      <p className="truncate text-xs font-medium text-[color:var(--muted)]">
+                      <p className="truncate text-[11px] font-medium" style={{ color: '#475569' }}>
                         สวัสดี, {user?.name?.split(' ')[0] ?? 'ผู้ใช้'} 👋
                       </p>
-                      <p className="truncate text-sm font-bold text-[color:var(--text)]">Smart Room</p>
+                      <p className="truncate text-sm font-bold" style={{ color: '#0f172a' }}>Smart Room</p>
                     </div>
                   </div>
 
@@ -1646,7 +1647,11 @@ export const DashboardLayout = () => {
                         setCalendarOpen(true);
                       }}
                       className="relative flex h-10 w-10 items-center justify-center rounded-full border shadow-sm transition hover:opacity-90"
-                      style={{ borderColor: 'var(--border)', background: 'var(--surface)', color: 'var(--muted)' }}
+                      style={{
+                        borderColor: 'rgba(255,255,255,0.72)',
+                        background: '#ffffff',
+                        color: 'var(--accent)'
+                      }}
                       aria-label="ปฏิทิน"
                     >
                       <MobileIcon
@@ -1665,7 +1670,11 @@ export const DashboardLayout = () => {
                           setMobileMenuOpen(false);
                         }}
                         className="relative flex h-10 w-10 items-center justify-center rounded-full border shadow-sm transition hover:opacity-90"
-                        style={{ borderColor: 'var(--border)', background: 'var(--surface)', color: 'var(--muted)' }}
+                        style={{
+                          borderColor: 'rgba(255,255,255,0.72)',
+                          background: '#ffffff',
+                          color: 'var(--accent)'
+                        }}
                         aria-label="การแจ้งเตือน"
                         aria-expanded={notifyOpen}
                         aria-haspopup="dialog"
@@ -1791,7 +1800,11 @@ export const DashboardLayout = () => {
                         setNotifyOpen(false);
                       }}
                       className="flex h-10 w-10 items-center justify-center rounded-full border shadow-sm transition hover:opacity-90"
-                      style={{ borderColor: 'var(--border)', background: 'var(--surface)', color: 'var(--muted)' }}
+                      style={{
+                        borderColor: 'rgba(255,255,255,0.72)',
+                        background: '#ffffff',
+                        color: 'var(--accent)'
+                      }}
                       aria-label="เมนู"
                       aria-expanded={mobileMenuOpen}
                       aria-haspopup="menu"
@@ -2000,6 +2013,17 @@ export const DashboardLayout = () => {
                   )
                   : null}
               </div>
+              <div
+                className="mobile-topbar-wave pointer-events-none absolute inset-x-0 top-[calc(100%-2px)] text-[color:var(--accent)]"
+                aria-hidden="true"
+              >
+                <svg viewBox="0 0 500 58" preserveAspectRatio="none" className="block h-full w-full">
+                  <path
+                    fill="currentColor"
+                    d="M0 0H500V36C431 55 381 53 321 34C259 15 217 17 162 37C104 58 55 50 0 25Z"
+                  />
+                </svg>
+              </div>
             </div>
 
           <main className={`relative z-10 ${isAiPage ? 'mt-0 sm:mt-2 lg:h-[calc(100vh-5rem)] lg:overflow-hidden' : 'mt-0 sm:mt-6 lg:mt-0'}`}>
@@ -2035,8 +2059,7 @@ export const DashboardLayout = () => {
             );
             const activeColor = activeAccentTheme.accent;
             const activeStrongColor = activeAccentTheme.accentStrong;
-            const activeIcon = '#ffffff';
-            const inactiveIcon = shadeColor(activeColor, 22);
+            const navItemColor = '#ffffff';
             const notchColor = theme === 'dark' ? '#020617' : '#f8fafc';
             const pillHeight = 64;
             const wrapperHeight = 100;
@@ -2104,7 +2127,7 @@ export const DashboardLayout = () => {
                               <MobileIcon
                                 name={item.icon}
                                 active={false}
-                                accent={isActive ? activeIcon : inactiveIcon}
+                                accent={navItemColor}
                                 className={isActive ? 'h-6 w-6' : 'h-6 w-6'}
                               />
                             </span>
@@ -2113,7 +2136,7 @@ export const DashboardLayout = () => {
                               className="mobile-bottom-nav__label pointer-events-none absolute inset-x-0 truncate px-1 text-center text-[11px] font-bold leading-none transition-colors duration-300"
                               style={{
                                 top: `${pillTop + 35}px`,
-                                color: isActive ? activeIcon : inactiveIcon
+                                color: navItemColor
                               }}
                             >
                               {item.label}

@@ -488,7 +488,7 @@ export const CareerAdvisorPage = ({ mode = 'career' }: CareerAdvisorPageProps) =
       iconClassName: 'text-white',
       tileStyle: { backgroundColor: '#059669' },
       icon: (
-        <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="#ffffff" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
           <path d="M5 5h14" />
           <path d="M5 12h14" />
           <path d="M5 19h9" />
@@ -508,7 +508,7 @@ export const CareerAdvisorPage = ({ mode = 'career' }: CareerAdvisorPageProps) =
       boxShadow: '0 10px 22px rgba(99,102,241,0.24)',
     },
     icon: (
-      <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="#ffffff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
         <path d="M4 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z" />
         <path d="M10 12h4" />
       </svg>
