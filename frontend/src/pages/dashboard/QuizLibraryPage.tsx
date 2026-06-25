@@ -1,6 +1,7 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { SlidersHorizontal } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
+import pdfWorkerSrc from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { api, apiFallbackClients } from '../../services/api';
 import { useAppAlert } from '../../context/AppAlertContext';
 import { useAuth } from '../../context/AuthContext';
@@ -30,6 +31,12 @@ interface Quiz {
   title: string;
   description?: string | null;
   subject_id: number;
+  metadata?: {
+    fallback_mode?: string;
+    fallback_message?: string;
+    fallback_reason?: string;
+    [key: string]: unknown;
+  } | null;
   questions?: QuizQuestion[];
   latest_attempt?: {
     score: number;
@@ -64,6 +71,49 @@ const formatFileSize = (bytes: number) => {
     unitIndex += 1;
   }
   return `${size.toFixed(size >= 10 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+};
+
+const normalizeQuizDescription = (value?: string | null) => {
+  const text = typeof value === 'string' ? value.trim() : '';
+  if (!text) return '';
+
+  const lowered = text.toLowerCase();
+  if (
+    lowered.includes('สร้างแบบฝึกหัด') ||
+    lowered.includes('ข้อความจริง') ||
+    lowered.includes('เอกสาร') ||
+    lowered.includes('readable')
+  ) {
+    return '';
+  }
+
+  return text;
+};
+
+const extractPdfTextInBrowser = async (file: File) => {
+  const pdfjs = await import('pdfjs-dist');
+  pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerSrc;
+
+  const buffer = await file.arrayBuffer();
+  const loadingTask = pdfjs.getDocument({ data: new Uint8Array(buffer) });
+  const pdf = await loadingTask.promise;
+  const pages: string[] = [];
+
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    const page = await pdf.getPage(pageNumber);
+    const textContent = await page.getTextContent();
+    const items = textContent.items as Array<{ str?: string }>;
+    const pageText = items
+      .map(item => (typeof item.str === 'string' ? item.str.trim() : ''))
+      .filter(Boolean)
+      .join(' ');
+
+    if (pageText) {
+      pages.push(pageText);
+    }
+  }
+
+  return pages.join('\n\n').trim();
 };
 
 const extractErrorMessage = (error: any, fallback: string) => {
@@ -133,6 +183,7 @@ const stripTrailingEllipsis = (value?: string | null) => {
 export const QuizLibraryPage = () => {
   const { success, error: showError } = useAppAlert();
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [subjects, setSubjects] = useState<SubjectOption[]>([]);
   const [selectedSemesterKey, setSelectedSemesterKey] = useState('all');
   const [quizzes, setQuizzes] = useState<Quiz[]>([]);
@@ -283,15 +334,33 @@ export const QuizLibraryPage = () => {
     formData.append('question_count', String(fileQuestionCount));
 
     try {
-      const response = await api.post<Quiz>(`/subjects/${selectedSubject}/quizzes/from-file`, formData, {
+      const fileExtension = selectedFile.name.split('.').pop()?.toLowerCase();
+      if (fileExtension === 'pdf') {
+        setFileStatus('กำลังอ่านข้อความจาก PDF...');
+        const extractedText = await extractPdfTextInBrowser(selectedFile);
+        if (extractedText) {
+          formData.append('extracted_text', extractedText);
+          setFileStatus('อ่านเนื้อหา PDF สำเร็จ กำลังสร้างแบบฝึกหัด...');
+        } else {
+          setFileStatus('ไม่พบข้อความที่เลือกคัดลอกได้ใน PDF กำลังลองส่งให้ระบบตรวจสอบต่อ...');
+        }
+      }
+
+      const response = await api.post<Quiz & { message?: string }>(`/subjects/${selectedSubject}/quizzes/from-file`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
-      setFileStatus('สร้างแบบฝึกหัดจากเอกสารเรียบร้อยแล้ว');
+      const fallbackMessage = response.data.metadata?.fallback_message;
+      setFileStatus(
+        typeof response.data.message === 'string' && response.data.message.trim() !== ''
+          ? response.data.message
+          : fallbackMessage || 'สร้างแบบฝึกหัดจากเอกสารเรียบร้อยแล้ว'
+      );
       setSelectedFile(null);
       setFileTitle('');
       if (selectedSubject === response.data.subject_id) {
         setQuizzes(prev => [response.data, ...prev]);
       }
+      navigate(`/quizzes/${response.data.id}`);
     } catch (error) {
       setFileError(extractErrorMessage(error, 'ไม่สามารถสร้างแบบฝึกหัดจากเอกสารได้'));
       setFileStatus(null);
@@ -346,7 +415,9 @@ export const QuizLibraryPage = () => {
     <div>
       <div className="hidden print:block">
         <h1 className="text-2xl font-semibold">{previewQuiz?.title ?? 'แบบฝึกหัด'}</h1>
-        {previewQuiz?.description ? <p className="mt-2 text-sm">{previewQuiz.description}</p> : null}
+        {normalizeQuizDescription(previewQuiz?.description) ? (
+          <p className="mt-2 text-sm">{normalizeQuizDescription(previewQuiz?.description)}</p>
+        ) : null}
         <ol className="mt-6 space-y-6 text-sm">
           {(previewQuiz?.questions ?? []).map((question, index) => (
             <li key={question.id} className="space-y-3">
@@ -640,7 +711,9 @@ export const QuizLibraryPage = () => {
                   {subjectNameMap.get(quiz.subject_id) ?? `วิชา ${quiz.subject_id}`}
                 </p>
                 <h4 className="mt-2 text-lg font-semibold text-[color:var(--text)]">{quiz.title}</h4>
-                <p className="mt-1 text-sm text-muted">{quiz.description ?? 'ไม่มีคำอธิบาย'}</p>
+                {normalizeQuizDescription(quiz.description) ? (
+                  <p className="mt-1 text-sm text-muted">{normalizeQuizDescription(quiz.description)}</p>
+                ) : null}
               </header>
               {quiz.latest_attempt ? (
                 <div className="mt-4 flex items-center justify-between rounded-2xl border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-primary">
@@ -704,8 +777,8 @@ export const QuizLibraryPage = () => {
                 <h3 className="mt-2 text-2xl font-semibold text-[color:var(--text)]">
                   {previewQuiz?.title ?? 'แบบฝึกหัด'}
                 </h3>
-                {previewQuiz?.description ? (
-                  <p className="mt-1 text-sm text-muted">{previewQuiz.description}</p>
+                {normalizeQuizDescription(previewQuiz?.description) ? (
+                  <p className="mt-1 text-sm text-muted">{normalizeQuizDescription(previewQuiz?.description)}</p>
                 ) : null}
               </div>
               <div className="flex items-center gap-2">

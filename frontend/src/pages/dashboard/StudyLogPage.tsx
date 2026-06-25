@@ -286,10 +286,7 @@ export const StudyLogPage = () => {
             <h2 className="mt-2 text-3xl font-semibold">{subject.name}</h2>
             <p className="mt-2 text-sm text-white/85">{subject.description ?? 'เพิ่มรายละเอียดรายวิชาภายหลังได้'}</p>
           </div>
-          <div className="rounded-2xl bg-white/15 p-4 text-sm">
-            <p className="text-white/80">ชั่วโมงเป้าหมาย/เดือน</p>
-            <p className="mt-1 text-2xl font-semibold">{subject.target_hours ?? 0} ชม.</p>
-          </div>
+        
         </div>
       </section>
 

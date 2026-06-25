@@ -191,24 +191,28 @@ class AssistantChatController extends Controller
         $message = trim($error->getMessage());
 
         if ($message !== '') {
+            if (str_contains($message, 'API key is missing') || str_contains($message, 'Groq API key is missing')) {
+                return 'ตอนนี้ระบบยังอ่านค่า Groq API key ไม่ได้ จึงตอบกลับไม่สำเร็จค่ะ กรุณาตรวจสอบค่า `GROQ_API_KEY` และรีสตาร์ตเซิร์ฟเวอร์แล้วลองใหม่อีกครั้งค่ะ';
+            }
+
             if (str_contains($message, 'quota') || str_contains($message, 'Quota exceeded') || str_contains($message, 'free_tier_requests')) {
-                return 'ตอนนี้ Gemini ของระบบใช้โควต้าครบแล้ว จึงยังตอบกลับไม่ได้ชั่วคราว แต่ผมบันทึกข้อความของคุณไว้แล้ว กรุณารอสักครู่หรือเพิ่ม quota/billing แล้วลองส่งใหม่อีกครั้งครับ';
+                return 'ตอนนี้ Groq ของระบบใช้โควต้าครบแล้ว จึงยังตอบกลับไม่ได้ชั่วคราว แต่ผมบันทึกข้อความของคุณไว้แล้ว กรุณารอสักครู่หรือเพิ่ม quota/billing แล้วลองส่งใหม่อีกครั้งครับ';
             }
 
             if (str_contains($message, 'blocked')) {
-                return 'ตอนนี้ Gemini ของระบบถูกบล็อกการเรียกใช้งานอยู่ จึงยังตอบกลับไม่ได้ชั่วคราว แต่ผมบันทึกข้อความของคุณไว้แล้ว กรุณาตรวจสอบสิทธิ์ API แล้วลองใหม่อีกครั้งครับ';
+                return 'ตอนนี้ Groq ของระบบถูกบล็อกการเรียกใช้งานอยู่ จึงยังตอบกลับไม่ได้ชั่วคราว แต่ผมบันทึกข้อความของคุณไว้แล้ว กรุณาตรวจสอบสิทธิ์ API แล้วลองใหม่อีกครั้งครับ';
             }
 
             if (str_contains($message, 'not found') || str_contains($message, 'not supported for generateContent')) {
-                return 'ตอนนี้ Gemini ของระบบตั้งค่า model ไม่ตรงกับ endpoint ที่ใช้งาน จึงยังตอบกลับไม่ได้ชั่วคราว แต่ผมบันทึกข้อความของคุณไว้แล้ว กรุณาตรวจสอบ model แล้วลองใหม่อีกครั้งครับ';
+                return 'ตอนนี้ Groq ของระบบตั้งค่า model ไม่ตรงกับ endpoint ที่ใช้งาน จึงยังตอบกลับไม่ได้ชั่วคราว แต่ผมบันทึกข้อความของคุณไว้แล้ว กรุณาตรวจสอบ model แล้วลองใหม่อีกครั้งครับ';
             }
 
             if (str_contains($message, 'disabled') || str_contains($message, 'has not been used in project')) {
-                return 'ตอนนี้ Gemini API ของระบบยังไม่ได้เปิดใช้งานในโปรเจกต์นี้ จึงยังตอบกลับไม่ได้ชั่วคราว แต่ผมบันทึกข้อความของคุณไว้แล้ว กรุณาเปิด API แล้วลองใหม่อีกครั้งครับ';
+                return 'ตอนนี้ Groq API ของระบบยังไม่ได้เปิดใช้งานหรือยังไม่พร้อมใช้งาน จึงยังตอบกลับไม่ได้ชั่วคราว แต่ผมบันทึกข้อความของคุณไว้แล้ว กรุณาเปิด API แล้วลองใหม่อีกครั้งครับ';
             }
 
             if (str_contains($message, 'cURL error 7') || str_contains($message, 'Failed to connect to generativelanguage.googleapis.com')) {
-                return 'ตอนนี้เซิร์ฟเวอร์เชื่อมต่อ Gemini API ไม่ได้ (network/firewall) จึงยังตอบกลับไม่ได้ชั่วคราว แต่ผมบันทึกข้อความของคุณไว้แล้ว กรุณาตรวจสอบอินเทอร์เน็ตหรือ firewall ของเซิร์ฟเวอร์ แล้วลองใหม่อีกครั้งครับ';
+                return 'ตอนนี้เซิร์ฟเวอร์เชื่อมต่อ Groq API ไม่ได้ (network/firewall) จึงยังตอบกลับไม่ได้ชั่วคราว แต่ผมบันทึกข้อความของคุณไว้แล้ว กรุณาตรวจสอบอินเทอร์เน็ตหรือ firewall ของเซิร์ฟเวอร์ แล้วลองใหม่อีกครั้งครับ';
             }
         }
 

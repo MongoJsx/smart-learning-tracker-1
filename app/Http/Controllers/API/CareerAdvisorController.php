@@ -5,7 +5,6 @@ namespace App\Http\Controllers\API;
 use App\Http\Controllers\Controller;
 use App\Models\CareerPath;
 use App\Models\CareerRecommendation;
-use App\Models\Summary;
 use App\Models\User;
 use App\Services\AI\AIService;
 use Illuminate\Http\JsonResponse;
@@ -76,25 +75,26 @@ class CareerAdvisorController extends Controller
     {
         $user = $request->user();
         $topSubjects = $this->topSubjects($user->id);
+        $weakSubjects = $this->weakSubjects($user->id, collect($topSubjects)->pluck('id')->all());
         $latestQuiz = $this->latestQuizAttempt($user->id);
         $latestQuizAnalysis = $this->latestQuizAnalysis($user->id);
-
         $subjectProfiles = $this->buildSubjectProfiles($topSubjects);
 
         if ($subjectProfiles === []) {
-            if (Schema::hasTable('career_recommendations')) {
-                CareerRecommendation::query()->where('user_id', $user->id)->delete();
-            }
+            $this->clearRecommendations($user->id);
+
             return response()->json([
                 'top_subjects' => [],
+                'weak_subjects' => [],
+                'latest_quiz' => $latestQuiz,
+                'latest_quiz_analysis' => $latestQuizAnalysis,
                 'recommendations' => [],
-                'message' => 'ยังไม่มีผลแบบฝึกหัดเพียงพอสำหรับวิเคราะห์อาชีพ',
+                'message' => 'ยังไม่มีคะแนนแบบฝึกหัดเพียงพอ กรุณาทำแบบฝึกหัดก่อนเพื่อให้ระบบวิเคราะห์อาชีพได้',
             ]);
         }
 
         $recommendations = [];
         $message = null;
-        $weakSubjects = $this->weakSubjects($user->id, collect($topSubjects)->pluck('id')->all());
 
         try {
             $recommendations = $this->aiService->generateCareerRecommendations($user, $subjectProfiles, [
@@ -103,14 +103,17 @@ class CareerAdvisorController extends Controller
                 'weak_subjects' => $weakSubjects->values()->all(),
             ]);
         } catch (\Throwable $e) {
-            $message = $e->getMessage() ?: 'ไม่สามารถวิเคราะห์อาชีพด้วย AI ได้ (ยังไม่ได้ตั้งค่า AI หรือเซิร์ฟเวอร์ไม่พร้อม)';
+            Log::warning('Career AI analysis failed.', [
+                'user_id' => $user->id,
+                'error' => $e->getMessage(),
+            ]);
+            $message = $e->getMessage() ?: 'ไม่สามารถวิเคราะห์อาชีพด้วย AI ได้ในขณะนี้';
         }
 
         if ($recommendations === []) {
-            $message = $message ?: 'ยังไม่สามารถสร้างคำแนะนำอาชีพจาก AI ได้ในขณะนี้';
-        }
-
-        if ($recommendations !== []) {
+            $this->clearRecommendations($user->id);
+            $message = $message ?: 'AI ยังไม่สามารถวิเคราะห์อาชีพจากคะแนนแบบฝึกหัดจริงได้ หรือข้อมูลคะแนนยังไม่เพียงพอ';
+        } else {
             $this->storeRecommendations($user, $topSubjects, $recommendations);
         }
 
@@ -129,31 +132,27 @@ class CareerAdvisorController extends Controller
         $stats = $this->subjectStats($userId);
         $highestLatestQuizScore = (float) ($stats->max('latest_quiz_score') ?? 0);
 
-        $ranked = $stats
-            ->filter(function (array $row) {
-                return ($row['quiz_attempt_count'] ?? 0) > 0;
-            })
+        return $stats
+            ->filter(fn (array $row) => (int) ($row['quiz_attempt_count'] ?? 0) > 0)
             ->map(function (array $row) use ($highestLatestQuizScore) {
-                $minutes = (int) ($row['total_minutes'] ?? 0);
-                $studyHours = $minutes > 0 ? $minutes / 60 : 0.0;
                 $latestQuiz = (float) ($row['latest_quiz_score'] ?? 0);
                 $avgQuiz = (float) ($row['avg_quiz_score'] ?? 0);
+                $maxQuiz = (float) ($row['max_quiz_score'] ?? 0);
                 $attempts = (int) ($row['quiz_attempt_count'] ?? 0);
                 $passedCount = (int) ($row['passed_count'] ?? 0);
-                $passRate = $attempts > 0 ? $passedCount / $attempts : 0;
+                $passRatePercent = $attempts > 0 ? ($passedCount / $attempts) * 100 : 0;
                 $isLatestTop = $latestQuiz > 0 && $highestLatestQuizScore > 0 && abs($latestQuiz - $highestLatestQuizScore) < 0.001;
 
-                // Career evidence must come from actual quiz performance.
-                $score = ($avgQuiz * 0.55)
-                    + ($latestQuiz * 0.25)
-                    + ($passRate * 15)
+                $score = ($avgQuiz * 0.45)
+                    + ($latestQuiz * 0.30)
+                    + ($maxQuiz * 0.15)
+                    + ($passRatePercent * 0.10)
                     + min(5, $attempts);
+
                 $row['strength_score'] = round($score, 3);
                 $row['is_latest_top_score'] = $isLatestTop;
-
-                // normalise hours for UI
-                $row['study_hours'] = $studyHours > 0 ? round($studyHours, 1) : 0.0;
-                unset($row['total_minutes']);
+                $row['pass_rate'] = round($passRatePercent, 1);
+                $row['study_hours'] = 0.0;
 
                 return $row;
             })
@@ -164,40 +163,6 @@ class CareerAdvisorController extends Controller
                 unset($row['strength_score']);
                 return $row;
             });
-
-        return $this->attachMoodScores($ranked, $userId);
-    }
-
-    /**
-     * @param  Collection<int, array<string,mixed>>  $subjects
-     * @return Collection<int, array<string,mixed>>
-     */
-    private function attachMoodScores(Collection $subjects, int $userId): Collection
-    {
-        if ($subjects->isEmpty()) {
-            return $subjects;
-        }
-
-        if (! Schema::hasTable('mood_logs')) {
-            return $subjects;
-        }
-
-        $ids = $subjects->pluck('id')->all();
-        $moods = DB::table('mood_logs')
-            ->where('user_id', $userId)
-            ->whereIn('subject_id', $ids)
-            ->selectRaw('subject_id, AVG((energy_level + focus_level) / 2.0) as avg_mood_score')
-            ->groupBy('subject_id')
-            ->get()
-            ->mapWithKeys(fn ($row) => [(int) $row->subject_id => (float) $row->avg_mood_score]);
-
-        return $subjects->map(function (array $subject) use ($moods) {
-            $subjectId = (int) ($subject['id'] ?? 0);
-            if ($subjectId && $moods->has($subjectId)) {
-                $subject['avg_mood_score'] = round((float) $moods->get($subjectId), 1);
-            }
-            return $subject;
-        });
     }
 
     /**
@@ -205,176 +170,128 @@ class CareerAdvisorController extends Controller
      */
     private function weakSubjects(int $userId, array $excludeSubjectIds = []): Collection
     {
-        $stats = $this->subjectStats($userId);
+        $stats = $this->subjectStats($userId)
+            ->filter(fn (array $row) => (int) ($row['quiz_attempt_count'] ?? 0) > 0);
 
         if ($excludeSubjectIds !== []) {
             $stats = $stats->reject(fn (array $row) => in_array((int) ($row['id'] ?? 0), $excludeSubjectIds, true))->values();
         }
 
-        $ranked = $stats
+        return $stats
             ->map(function (array $row) {
-                $summaryCount = (int) ($row['summary_count'] ?? 0);
-                $minutes = (int) ($row['total_minutes'] ?? 0);
-                $studyHours = $minutes > 0 ? $minutes / 60 : 0.0;
-                $latestQuiz = (float) ($row['latest_quiz_score'] ?? 0);
                 $attempts = (int) ($row['quiz_attempt_count'] ?? 0);
+                $latestQuiz = (float) ($row['latest_quiz_score'] ?? 0);
+                $avgQuiz = (float) ($row['avg_quiz_score'] ?? 0);
+                $passedCount = (int) ($row['passed_count'] ?? 0);
+                $passRatePercent = $attempts > 0 ? ($passedCount / $attempts) * 100 : 0;
 
-                $score = ($summaryCount * 1.15)
-                    + ($studyHours * 0.2)
-                    + (($latestQuiz / 100) * 4.0)
-                    + ((((float) ($row['avg_quiz_score'] ?? 0)) / 100) * 2.2)
-                    + min(1.4, $attempts * 0.15);
-                $row['strength_score'] = round($score, 3);
+                $riskScore = (100 - $avgQuiz) * 0.45
+                    + (100 - $latestQuiz) * 0.35
+                    + (100 - $passRatePercent) * 0.20;
+
+                $row['weak_score'] = round($riskScore, 3);
+                $row['pass_rate'] = round($passRatePercent, 1);
+
                 return $row;
             })
-            ->sortBy('strength_score')
+            ->sortByDesc('weak_score')
             ->values()
-            ->take(2);
+            ->take(2)
+            ->map(function (array $row) {
+                $avgQuiz = (float) ($row['avg_quiz_score'] ?? 0);
+                $latestQuiz = (float) ($row['latest_quiz_score'] ?? 0);
+                $attempts = (int) ($row['quiz_attempt_count'] ?? 0);
+                $passRate = (float) ($row['pass_rate'] ?? 0);
 
-        return $ranked->map(function (array $row) {
-            $summaryCount = (int) ($row['summary_count'] ?? 0);
-            $logCount = (int) ($row['study_log_count'] ?? 0);
-            $minutes = (int) ($row['total_minutes'] ?? 0);
-            $attempts = (int) ($row['quiz_attempt_count'] ?? 0);
-            $latestQuiz = (float) ($row['latest_quiz_score'] ?? 0);
+                $hint = 'คะแนนแบบฝึกหัดยังควรพัฒนา แนะนำทบทวนข้อที่ตอบผิดและลองทำแบบฝึกหัดซ้ำ';
+                if ($latestQuiz < 50) {
+                    $hint = 'คะแนนล่าสุดต่ำกว่า 50% แนะนำทวนเนื้อหาพื้นฐานและทำโจทย์เพิ่มก่อนวิเคราะห์อาชีพ';
+                } elseif ($avgQuiz < 60) {
+                    $hint = 'คะแนนเฉลี่ยยังต่ำกว่า 60% แนะนำฝึกเพิ่มเพื่อให้ข้อมูลวิเคราะห์อาชีพน่าเชื่อถือขึ้น';
+                } elseif ($passRate < 60) {
+                    $hint = 'อัตราผ่านยังไม่สูง แนะนำทำแบบฝึกหัดหลายชุดเพื่อดูความถนัดจริง';
+                }
 
-            $hint = 'ยังทบทวนน้อยหรือทำสรุปน้อย แนะนำเพิ่มความถี่ในการทบทวนและทำสรุปให้สม่ำเสมอ';
-            if ($attempts > 0 && $latestQuiz > 0 && $latestQuiz < 60) {
-                $hint = 'ทำแบบทดสอบแล้วแต่คะแนนยังต่ำ แนะนำทวนสรุปและทำโจทย์เพิ่มก่อนลองทำข้อสอบใหม่';
-            } elseif ($summaryCount === 0 && $logCount === 0 && $minutes === 0 && $attempts === 0) {
-                $hint = 'ยังไม่มีข้อมูลการเรียน/สรุป/ข้อสอบในวิชานี้ ลองเริ่มจากทบทวนบทพื้นฐานและทำสรุปสั้น ๆ';
-            } elseif ($summaryCount === 0 && ($logCount > 0 || $minutes > 0)) {
-                $hint = 'มีการบันทึกการเรียนแล้ว แต่ยังไม่มีสรุป ลองสรุป 1 หน้าเพื่อจับประเด็นสำคัญ';
-            } elseif ($minutes < 60) {
-                $hint = 'เวลาเรียนรวมยังน้อย ลองเพิ่มเวลาเรียน/ทบทวนให้มากขึ้นเพื่อความเข้าใจที่ต่อเนื่อง';
-            }
-
-            return [
-                'id' => (int) ($row['id'] ?? 0),
-                'subject_name' => (string) ($row['subject_name'] ?? ''),
-                'hint' => $hint,
-                'next_steps' => [
-                    'ทวนสรุป 20-30 นาที',
-                    'ทำแบบฝึกหัด 5 ข้อ',
-                    'ลองทำแบบทดสอบอีก 1 ครั้ง',
-                ],
-            ];
-        });
+                return [
+                    'id' => (int) ($row['id'] ?? 0),
+                    'subject_name' => (string) ($row['subject_name'] ?? ''),
+                    'avg_quiz_score' => $avgQuiz,
+                    'latest_quiz_score' => $latestQuiz,
+                    'quiz_attempt_count' => $attempts,
+                    'pass_rate' => $passRate,
+                    'hint' => $hint,
+                    'next_steps' => [
+                        'ทบทวนข้อที่ตอบผิดจากแบบฝึกหัดล่าสุด',
+                        'ทำแบบฝึกหัดเพิ่มอย่างน้อย 1 ชุด',
+                        'วิเคราะห์อาชีพอีกครั้งหลังมีคะแนนใหม่',
+                    ],
+                ];
+            });
     }
 
     /**
-     * รวมสถิติต่อวิชา (สรุป/เวลาเรียน/ผลสอบ) เพื่อใช้จัดอันดับจุดแข็ง
+     * รวมสถิติจากคะแนนแบบฝึกหัดจริงเท่านั้น
      *
      * @return Collection<int, array<string,mixed>>
      */
     private function subjectStats(int $userId): Collection
     {
-        if (! Schema::hasTable('subjects')) {
+        if (! Schema::hasTable('subjects') || ! Schema::hasTable('quizzes') || ! Schema::hasTable('quiz_attempts')) {
             return collect();
         }
 
-        $hasLogs = Schema::hasTable('study_logs');
-        $hasSummaries = $hasLogs && Schema::hasTable('summaries');
-        $hasQuizzes = Schema::hasTable('quizzes');
-        $hasQuizAttempts = $hasQuizzes && Schema::hasTable('quiz_attempts');
+        $answerCountSql = $this->answerCountSql();
 
-        $logsAgg = $hasLogs
-            ? DB::table('study_logs')
-                ->selectRaw('subject_id, COUNT(*) as study_log_count, COALESCE(SUM(duration_minutes), 0) as total_minutes')
-                ->groupBy('subject_id')
-            : null;
+        $quizAgg = DB::table('quiz_attempts')
+            ->join('quizzes', 'quizzes.id', '=', 'quiz_attempts.quiz_id')
+            ->where('quiz_attempts.user_id', $userId)
+            ->selectRaw('quizzes.subject_id as subject_id')
+            ->selectRaw('COUNT(*) as quiz_attempt_count')
+            ->selectRaw("AVG(CASE WHEN {$answerCountSql} > 0 THEN (quiz_attempts.score / {$answerCountSql}) * 100 ELSE 0 END) as avg_quiz_score")
+            ->selectRaw("MAX(CASE WHEN {$answerCountSql} > 0 THEN (quiz_attempts.score / {$answerCountSql}) * 100 ELSE 0 END) as max_quiz_score")
+            ->selectRaw('SUM(CASE WHEN quiz_attempts.passed = 1 THEN 1 ELSE 0 END) as passed_count')
+            ->groupBy('quizzes.subject_id');
 
-        $summariesAgg = $hasSummaries
-            ? DB::table('summaries')
-                ->join('study_logs', 'study_logs.id', '=', 'summaries.study_log_id')
-                ->selectRaw('study_logs.subject_id as subject_id, COUNT(summaries.id) as summary_count')
-                ->groupBy('study_logs.subject_id')
-            : null;
+        $latestQuizIdsAgg = DB::table('quiz_attempts')
+            ->join('quizzes', 'quizzes.id', '=', 'quiz_attempts.quiz_id')
+            ->where('quiz_attempts.user_id', $userId)
+            ->selectRaw('quizzes.subject_id as subject_id, MAX(quiz_attempts.id) as latest_attempt_id')
+            ->groupBy('quizzes.subject_id');
 
-        $quizAgg = $hasQuizAttempts
-            ? DB::table('quiz_attempts')
-                ->join('quizzes', 'quizzes.id', '=', 'quiz_attempts.quiz_id')
-                ->where('quiz_attempts.user_id', $userId)
-                ->selectRaw('quizzes.subject_id as subject_id')
-                ->selectRaw('COUNT(*) as quiz_attempt_count')
-                ->selectRaw('AVG(CASE WHEN JSON_LENGTH(quiz_attempts.answers) > 0 THEN (quiz_attempts.score / JSON_LENGTH(quiz_attempts.answers)) * 100 ELSE 0 END) as avg_quiz_score')
-                ->selectRaw('MAX(CASE WHEN JSON_LENGTH(quiz_attempts.answers) > 0 THEN (quiz_attempts.score / JSON_LENGTH(quiz_attempts.answers)) * 100 ELSE 0 END) as max_quiz_score')
-                ->selectRaw('SUM(CASE WHEN quiz_attempts.passed = 1 THEN 1 ELSE 0 END) as passed_count')
-                ->groupBy('quizzes.subject_id')
-            : null;
-
-        $latestQuizIdsAgg = $hasQuizAttempts
-            ? DB::table('quiz_attempts')
-                ->join('quizzes', 'quizzes.id', '=', 'quiz_attempts.quiz_id')
-                ->where('quiz_attempts.user_id', $userId)
-                ->selectRaw('quizzes.subject_id as subject_id, MAX(quiz_attempts.id) as latest_attempt_id')
-                ->groupBy('quizzes.subject_id')
-            : null;
-
-        $latestQuizAgg = $latestQuizIdsAgg
-            ? DB::query()
-                ->fromSub($latestQuizIdsAgg, 'lqid')
-                ->join('quiz_attempts', 'quiz_attempts.id', '=', 'lqid.latest_attempt_id')
-                ->selectRaw('lqid.subject_id as subject_id')
-                ->selectRaw('CASE WHEN JSON_LENGTH(quiz_attempts.answers) > 0 THEN (quiz_attempts.score / JSON_LENGTH(quiz_attempts.answers)) * 100 ELSE 0 END as latest_quiz_score')
-            : null;
+        $latestQuizAgg = DB::query()
+            ->fromSub($latestQuizIdsAgg, 'lqid')
+            ->join('quiz_attempts', 'quiz_attempts.id', '=', 'lqid.latest_attempt_id')
+            ->selectRaw('lqid.subject_id as subject_id')
+            ->selectRaw("CASE WHEN {$answerCountSql} > 0 THEN (quiz_attempts.score / {$answerCountSql}) * 100 ELSE 0 END as latest_quiz_score");
 
         $query = DB::table('subjects')
             ->where('subjects.user_id', $userId)
-            ->selectRaw('subjects.id, subjects.name as subject_name');
-
-        if ($logsAgg) {
-            $query->leftJoinSub($logsAgg, 'logs', 'logs.subject_id', '=', 'subjects.id');
-            $query->selectRaw('COALESCE(logs.study_log_count, 0) as study_log_count');
-            $query->selectRaw('COALESCE(logs.total_minutes, 0) as total_minutes');
-        } else {
-            $query->selectRaw('0 as study_log_count');
-            $query->selectRaw('0 as total_minutes');
-        }
-
-        if ($summariesAgg) {
-            $query->leftJoinSub($summariesAgg, 'sum', 'sum.subject_id', '=', 'subjects.id');
-            $query->selectRaw('COALESCE(sum.summary_count, 0) as summary_count');
-        } else {
-            $query->selectRaw('0 as summary_count');
-        }
-
-        if ($quizAgg) {
-            $query->leftJoinSub($quizAgg, 'qa', 'qa.subject_id', '=', 'subjects.id');
-            $query->selectRaw('COALESCE(qa.quiz_attempt_count, 0) as quiz_attempt_count');
-            $query->selectRaw('COALESCE(qa.avg_quiz_score, 0) as avg_quiz_score');
-            $query->selectRaw('COALESCE(qa.max_quiz_score, 0) as max_quiz_score');
-            $query->selectRaw('COALESCE(qa.passed_count, 0) as passed_count');
-        } else {
-            $query->selectRaw('0 as quiz_attempt_count');
-            $query->selectRaw('0 as avg_quiz_score');
-            $query->selectRaw('0 as max_quiz_score');
-            $query->selectRaw('0 as passed_count');
-        }
-
-        if ($latestQuizAgg) {
-            $query->leftJoinSub($latestQuizAgg, 'lqa', 'lqa.subject_id', '=', 'subjects.id');
-            $query->selectRaw('COALESCE(lqa.latest_quiz_score, 0) as latest_quiz_score');
-        } else {
-            $query->selectRaw('0 as latest_quiz_score');
-        }
+            ->leftJoinSub($quizAgg, 'qa', 'qa.subject_id', '=', 'subjects.id')
+            ->leftJoinSub($latestQuizAgg, 'lqa', 'lqa.subject_id', '=', 'subjects.id')
+            ->selectRaw('subjects.id, subjects.name as subject_name')
+            ->selectRaw('COALESCE(qa.quiz_attempt_count, 0) as quiz_attempt_count')
+            ->selectRaw('COALESCE(qa.avg_quiz_score, 0) as avg_quiz_score')
+            ->selectRaw('COALESCE(qa.max_quiz_score, 0) as max_quiz_score')
+            ->selectRaw('COALESCE(qa.passed_count, 0) as passed_count')
+            ->selectRaw('COALESCE(lqa.latest_quiz_score, 0) as latest_quiz_score');
 
         try {
             return collect($query->get())->map(function ($row) {
                 return [
                     'id' => (int) $row->id,
                     'subject_name' => (string) ($row->subject_name ?? ''),
-                    'summary_count' => (int) ($row->summary_count ?? 0),
-                    'study_log_count' => (int) ($row->study_log_count ?? 0),
-                    'total_minutes' => (int) ($row->total_minutes ?? 0),
                     'quiz_attempt_count' => (int) ($row->quiz_attempt_count ?? 0),
-                    'avg_quiz_score' => is_null($row->avg_quiz_score) ? null : round((float) $row->avg_quiz_score, 1),
-                    'max_quiz_score' => (int) ($row->max_quiz_score ?? 0),
-                    'latest_quiz_score' => (int) ($row->latest_quiz_score ?? 0),
+                    'avg_quiz_score' => round((float) ($row->avg_quiz_score ?? 0), 1),
+                    'max_quiz_score' => round((float) ($row->max_quiz_score ?? 0), 1),
+                    'latest_quiz_score' => round((float) ($row->latest_quiz_score ?? 0), 1),
                     'passed_count' => (int) ($row->passed_count ?? 0),
                 ];
             })->values();
         } catch (\Throwable $e) {
+            Log::warning('Failed to load career subject quiz stats.', [
+                'user_id' => $userId,
+                'error' => $e->getMessage(),
+            ]);
             return collect();
         }
     }
@@ -385,33 +302,32 @@ class CareerAdvisorController extends Controller
      */
     private function buildSubjectProfiles(Collection $topSubjects): array
     {
-        $subjectIds = $topSubjects->pluck('id')->all();
-        $summarySnippets = Summary::query()
-            ->select('summaries.content', 'study_logs.subject_id')
-            ->join('study_logs', 'summaries.study_log_id', '=', 'study_logs.id')
-            ->whereIn('study_logs.subject_id', $subjectIds)
-            ->orderByDesc('summaries.created_at')
-            ->get()
-            ->groupBy('subject_id')
-            ->map(function (Collection $items) {
-                $content = (string) optional($items->first())->content;
-                return Str::limit(trim($content), 400, '...');
-            });
+        return $topSubjects
+            ->filter(fn (array $subject) => (int) ($subject['quiz_attempt_count'] ?? 0) > 0)
+            ->map(function (array $subject) {
+                $attempts = (int) ($subject['quiz_attempt_count'] ?? 0);
+                $passedCount = (int) ($subject['passed_count'] ?? 0);
+                $avgScore = (float) ($subject['avg_quiz_score'] ?? 0);
+                $latestScore = (float) ($subject['latest_quiz_score'] ?? 0);
+                $maxScore = (float) ($subject['max_quiz_score'] ?? 0);
+                $passRate = $attempts > 0 ? round(($passedCount / $attempts) * 100, 1) : 0.0;
 
-        return $topSubjects->map(function (array $subject) use ($summarySnippets) {
-            $snippet = $summarySnippets->get($subject['id']);
-            return [
-                'id' => $subject['id'],
-                'name' => $subject['subject_name'],
-                'summary_count' => $subject['summary_count'],
-                'study_hours' => $subject['study_hours'],
-                'study_log_count' => $subject['study_log_count'],
-                'quiz_attempt_count' => $subject['quiz_attempt_count'] ?? 0,
-                'avg_quiz_score' => $subject['avg_quiz_score'] ?? null,
-                'latest_quiz_score' => $subject['latest_quiz_score'] ?? null,
-                'summary_excerpt' => $snippet ?: null,
-            ];
-        })->values()->all();
+                return [
+                    'id' => (int) $subject['id'],
+                    'name' => (string) $subject['subject_name'],
+                    'quiz_attempt_count' => $attempts,
+                    'avg_quiz_score' => $avgScore,
+                    'latest_quiz_score' => $latestScore,
+                    'max_quiz_score' => $maxScore,
+                    'passed_count' => $passedCount,
+                    'pass_rate' => $passRate,
+                    'skill_level' => $avgScore >= 80
+                        ? 'ถนัดมากจากคะแนนแบบฝึกหัด'
+                        : ($avgScore >= 60 ? 'มีพื้นฐานจากคะแนนแบบฝึกหัด' : 'ควรพัฒนาจากคะแนนแบบฝึกหัด'),
+                ];
+            })
+            ->values()
+            ->all();
     }
 
     private function latestQuizAttempt(int $userId): ?array
@@ -526,6 +442,7 @@ class CareerAdvisorController extends Controller
         if (! Schema::hasTable('career_recommendations')) {
             return;
         }
+
         $columns = Schema::getColumnListing('career_recommendations');
         $hasCareerColumn = in_array('career', $columns, true);
         $hasCareerPathId = in_array('career_path_id', $columns, true);
@@ -538,16 +455,25 @@ class CareerAdvisorController extends Controller
             ->mapWithKeys(fn (array $subject) => [Str::lower($subject['subject_name']) => $subject['id']]);
 
         foreach ($recommendations as $recommendation) {
-            $careerName = trim((string) ($recommendation['career'] ?? 'Career Path'));
+            $careerName = trim((string) ($recommendation['career'] ?? ''));
+            $subjectsText = trim((string) ($recommendation['subjects'] ?? ''));
+            $skillsText = trim((string) ($recommendation['skills'] ?? ''));
+            $reasonText = trim((string) ($recommendation['reason'] ?? ''));
 
-            $subjectsText = (string) ($recommendation['subjects'] ?? '');
+            if ($careerName === '' || $subjectsText === '' || $skillsText === '' || $reasonText === '') {
+                continue;
+            }
+
             $subjectId = $this->matchSubjectId($subjectNameMap, $subjectsText);
+            if ($subjectId === null) {
+                continue;
+            }
 
             $payload = [
                 'user_id' => $user->id,
                 'subject_id' => $subjectId,
-                'score' => $recommendation['score'] ?? null,
-                'reason' => $this->fitDbVarchar((string) ($recommendation['reason'] ?? ''), 255),
+                'score' => max(0, min(100, (float) ($recommendation['score'] ?? 0))),
+                'reason' => $this->fitDbVarchar($reasonText, 255),
                 'metadata' => $this->normalizeRecommendationMetadata($recommendation),
             ];
 
@@ -555,11 +481,10 @@ class CareerAdvisorController extends Controller
                 $payload['career'] = $this->fitDbVarchar($careerName, 255);
             }
 
-            // Backward-compatible: if legacy schema still requires career_path_id, always provide it.
             if ($hasCareerPathId && $hasCareerPathsTable) {
                 $careerPath = CareerPath::firstOrCreate(
                     ['name' => $careerName],
-                    ['description' => $recommendation['reason'] ?? null]
+                    ['description' => $reasonText]
                 );
                 $payload['career_path_id'] = $careerPath->id;
             }
@@ -573,6 +498,13 @@ class CareerAdvisorController extends Controller
                     'error' => $exception->getMessage(),
                 ]);
             }
+        }
+    }
+
+    private function clearRecommendations(int $userId): void
+    {
+        if (Schema::hasTable('career_recommendations')) {
+            CareerRecommendation::query()->where('user_id', $userId)->delete();
         }
     }
 
@@ -601,45 +533,16 @@ class CareerAdvisorController extends Controller
         if ($career === '') {
             $career = trim((string) ($rec->careerPath?->name ?? ''));
         }
-        if ($career === '') {
-            $rawMetadata = $rec->getRawOriginal('metadata');
-            if (is_string($rawMetadata) && trim($rawMetadata) !== '') {
-                $decoded = json_decode($rawMetadata, true);
-                if (is_array($decoded) && ! empty($decoded['career']) && is_string($decoded['career'])) {
-                    $career = trim($decoded['career']);
-                }
-            } elseif (is_array($rec->metadata)) {
-                $metaCareer = data_get($rec->metadata, 'career');
-                if (is_string($metaCareer)) {
-                    $career = trim($metaCareer);
-                }
-            }
-        }
-        if ($career === '') {
-            return null;
+
+        $metadata = $this->decodeMetadata($rec);
+        if ($career === '' && is_string($metadata['career'] ?? null)) {
+            $career = trim((string) $metadata['career']);
         }
 
-        $skills = null;
-        $subjects = null;
-        $rawMetadata = $rec->getRawOriginal('metadata');
-        if (is_string($rawMetadata) && trim($rawMetadata) !== '') {
-            $decoded = json_decode($rawMetadata, true);
-            if (is_array($decoded)) {
-                if (! empty($decoded['skills']) && is_string($decoded['skills'])) {
-                    $skills = $decoded['skills'];
-                }
-                if (! empty($decoded['subjects']) && is_string($decoded['subjects'])) {
-                    $subjects = $decoded['subjects'];
-                }
-            }
-        } elseif (is_array($rec->metadata)) {
-            $skills = is_string(data_get($rec->metadata, 'skills')) ? (string) data_get($rec->metadata, 'skills') : null;
-            $subjects = is_string(data_get($rec->metadata, 'subjects')) ? (string) data_get($rec->metadata, 'subjects') : null;
-        }
+        $skills = trim((string) ($metadata['skills'] ?? ''));
+        $subjects = trim((string) ($metadata['subjects'] ?? ''));
 
-        $skills = trim((string) ($skills ?? ''));
-        $subjects = trim((string) ($subjects ?? ''));
-        if ($skills === '' || $subjects === '') {
+        if ($career === '' || $skills === '') {
             return null;
         }
 
@@ -652,6 +555,20 @@ class CareerAdvisorController extends Controller
             'reason' => $rec->reason,
             'created_at' => optional($rec->created_at)->toDateTimeString(),
         ];
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function decodeMetadata(CareerRecommendation $rec): array
+    {
+        $rawMetadata = $rec->getRawOriginal('metadata');
+        if (is_string($rawMetadata) && trim($rawMetadata) !== '') {
+            $decoded = json_decode($rawMetadata, true);
+            return is_array($decoded) ? $decoded : [];
+        }
+
+        return is_array($rec->metadata) ? $rec->metadata : [];
     }
 
     private function normalizeRecommendationMetadata(array $recommendation): ?array
@@ -667,7 +584,7 @@ class CareerAdvisorController extends Controller
             'subjects' => $this->fitDbVarchar($subjects, 80),
         ];
 
-        $encoded = json_encode($metadata);
+        $encoded = json_encode($metadata, JSON_UNESCAPED_UNICODE);
         if ($encoded !== false && strlen($encoded) <= 240) {
             return $metadata;
         }
@@ -677,7 +594,7 @@ class CareerAdvisorController extends Controller
         for ($i = 0; $i < 18; $i++) {
             $metadata['skills'] = $this->fitDbVarchar($skills, $skillsLimit);
             $metadata['subjects'] = $this->fitDbVarchar($subjects, $subjectsLimit);
-            $encoded = json_encode($metadata);
+            $encoded = json_encode($metadata, JSON_UNESCAPED_UNICODE);
             if ($encoded !== false && strlen($encoded) <= 240) {
                 return $metadata;
             }
@@ -701,6 +618,18 @@ class CareerAdvisorController extends Controller
 
         $limit = max(4, $maxBytes - 3);
         $cut = mb_strcut($text, 0, $limit, 'UTF-8');
-        return rtrim($cut)."...";
+
+        return rtrim($cut).'...';
+    }
+
+    private function answerCountSql(): string
+    {
+        $driver = DB::connection()->getDriverName();
+
+        return match ($driver) {
+            'sqlite' => "json_array_length(quiz_attempts.answers)",
+            'pgsql' => "jsonb_array_length(quiz_attempts.answers::jsonb)",
+            default => "JSON_LENGTH(quiz_attempts.answers)",
+        };
     }
 }

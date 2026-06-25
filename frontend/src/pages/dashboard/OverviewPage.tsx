@@ -169,6 +169,25 @@ const toDisplayDateGregorian = (value?: string | null) => {
   return `${day}/${month}/${year}`;
 };
 
+const buildTimeOptions = (stepMinutes = 5) => {
+  const safeStep = Number.isFinite(stepMinutes) && stepMinutes > 0 ? Math.round(stepMinutes) : 5;
+  const result: string[] = [];
+  for (let minutes = 0; minutes < 24 * 60; minutes += safeStep) {
+    const hours = Math.floor(minutes / 60);
+    const mins = minutes % 60;
+    result.push(`${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`);
+  }
+  return result;
+};
+
+const overviewTimeOptions = buildTimeOptions(5);
+
+const formatThaiTimeOptionLabel = (value: string) => {
+  const normalized = value.trim();
+  if (!/^\d{2}:\d{2}$/.test(normalized)) return value;
+  return `${normalized.replace(':', '.')} น.`;
+};
+
 const formatSubjectDate = (value?: string | null) => {
   if (!value) return null;
   return toDisplayDate(value) ?? value;
@@ -2406,290 +2425,295 @@ const deleteCalendarEventWithFallback = async (eventId: number) => {
       {subjectEditorOpen && (
         <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/55 px-4 py-2 backdrop-blur-sm sm:py-4">
           <div className="flex min-h-full items-start justify-center pt-1 sm:pt-2">
-          <div
-            className="surface my-2 w-full max-w-lg overflow-hidden rounded-[1.75rem] border p-0 shadow-[0_28px_80px_rgba(15,23,42,0.30)]"
-            style={{ borderColor: 'var(--border)', background: 'var(--surface)', color: 'var(--text)' }}
-          >
             <div
-              className="h-1.5 w-full"
-              style={{ background: 'linear-gradient(90deg, var(--accent), rgba(var(--accent-rgb),0.42))' }}
-            />
-            <div className="max-h-[calc(100dvh-4.5rem)] overflow-y-auto p-5 sm:max-h-[calc(100dvh-2rem)] sm:p-6">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <span
-                  className="inline-flex rounded-full px-3 py-1 text-[10px] font-bold uppercase tracking-[0.2em]"
-                  style={{ background: 'rgba(var(--accent-rgb),0.10)', color: 'var(--accent)' }}
-                >
-                  Subject
-                </span>
-                <h3 className="mt-3 text-xl font-bold text-[color:var(--text)]">{subjectEditor.subjectId ? 'แก้ไขวิชา' : 'เพิ่มวิชา'}</h3>
-                <p className="mt-1 text-sm leading-6 text-[color:var(--muted)]">สร้างรายวิชาเพื่อใช้จัดตารางเรียนและบันทึกการเรียน</p>
-              </div>
-            </div>
+              className="surface my-2 w-full max-w-lg overflow-hidden rounded-[1.75rem] border p-0 shadow-[0_28px_80px_rgba(15,23,42,0.30)]"
+              style={{ borderColor: 'var(--border)', background: 'var(--surface)', color: 'var(--text)' }}
+            >
+              <div
+                className="h-1.5 w-full"
+                style={{ background: 'linear-gradient(90deg, var(--accent), rgba(var(--accent-rgb),0.42))' }}
+              />
+              <div className="max-h-[calc(100dvh-4.5rem)] overflow-y-auto p-5 sm:max-h-[calc(100dvh-2rem)] sm:p-6">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <span
+                      className="inline-flex rounded-full px-3 py-1 text-[10px] font-bold uppercase tracking-[0.2em]"
+                      style={{ background: 'rgba(var(--accent-rgb),0.10)', color: 'var(--accent)' }}
+                    >
+                      Subject
+                    </span>
+                    <h3 className="mt-3 text-xl font-bold text-[color:var(--text)]">
+                      {subjectEditor.subjectId ? 'แก้ไขวิชา' : 'เพิ่มวิชา'}
+                    </h3>
+                    <p className="mt-1 text-sm leading-6 text-[color:var(--muted)]">
+                      สร้างรายวิชาเพื่อใช้จัดตารางเรียนและบันทึกการเรียน
+                    </p>
+                  </div>
+                </div>
 
-            {subjectEditorError && (
-              <div className="mt-4 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2.5 text-xs text-rose-500">
-                {subjectEditorError}
-              </div>
-            )}
+                {subjectEditorError && (
+                  <div className="mt-4 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2.5 text-xs text-rose-500">
+                    {subjectEditorError}
+                  </div>
+                )}
 
-            <div className="mt-5 space-y-4 pb-28 text-sm sm:pb-20">
-              <div>
-                <label className="mb-2 block text-xs font-semibold text-[color:var(--muted)]">ภาคเรียน</label>
-                <select
-                  value={subjectEditor.semesterId}
-                  onChange={event => setSubjectEditor(prev => ({ ...prev, semesterId: event.target.value }))}
-                  className="w-full rounded-xl border px-3.5 py-3 text-[color:var(--text)] shadow-sm outline-none transition focus:ring-2"
-                  style={{
-                    borderColor: 'var(--border)',
-                    background: 'var(--surface-2)',
-                    ['--tw-ring-color' as string]: 'rgba(var(--accent-rgb),0.24)',
-                  }}
-                >
-                  <option value="">เลือกภาคเรียน</option>
-                  {semesterChoices.map(choice => (
-                    <option key={choice.semester_id} value={choice.semester_id}>
-                      {choice.label}
-                    </option>
-                  ))}
-                </select>
-                <div
-                  className="mt-3 rounded-xl border p-3"
-                  style={{ borderColor: 'var(--border)', background: 'var(--surface-2)' }}
-                >
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[color:var(--muted)]">เพิ่มเทอมเอง</p>
-                  <div className="mt-3 grid gap-2 sm:grid-cols-[120px,minmax(0,1fr),120px]">
+                <div className="mt-5 space-y-4 pb-24 text-sm sm:pb-10">
+                  <div>
+                    <label className="mb-2 block text-xs font-semibold text-[color:var(--muted)]">ภาคเรียน</label>
                     <select
-                      value={newSemester.semester}
-                      onChange={event => setNewSemester(prev => ({ ...prev, semester: event.target.value }))}
-                      className="w-full rounded-xl border px-3 py-3 text-[color:var(--text)] shadow-sm outline-none transition focus:ring-2"
+                      value={subjectEditor.semesterId}
+                      onChange={event => setSubjectEditor(prev => ({ ...prev, semesterId: event.target.value }))}
+                      className="w-full rounded-xl border px-3.5 py-3 text-[color:var(--text)] shadow-sm outline-none transition focus:ring-2"
                       style={{
                         borderColor: 'var(--border)',
-                        background: 'var(--surface)',
+                        background: 'var(--surface-2)',
                         ['--tw-ring-color' as string]: 'rgba(var(--accent-rgb),0.24)',
                       }}
                     >
-                      <option value="1">เทอม 1</option>
-                      <option value="2">เทอม 2</option>
-                      <option value="3">เทอม 3</option>
+                      <option value="">เลือกภาคเรียน</option>
+                      {semesterChoices.map(choice => (
+                        <option key={choice.semester_id} value={choice.semester_id}>
+                          {choice.label}
+                        </option>
+                      ))}
                     </select>
+                    <div
+                      className="mt-3 rounded-xl border p-3"
+                      style={{ borderColor: 'var(--border)', background: 'var(--surface-2)' }}
+                    >
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[color:var(--muted)]">เพิ่มเทอมเอง</p>
+                      <div className="mt-3 grid gap-2 sm:grid-cols-[120px,minmax(0,1fr),120px]">
+                        <select
+                          value={newSemester.semester}
+                          onChange={event => setNewSemester(prev => ({ ...prev, semester: event.target.value }))}
+                          className="w-full rounded-xl border px-3 py-3 text-[color:var(--text)] shadow-sm outline-none transition focus:ring-2"
+                          style={{
+                            borderColor: 'var(--border)',
+                            background: 'var(--surface)',
+                            ['--tw-ring-color' as string]: 'rgba(var(--accent-rgb),0.24)',
+                          }}
+                        >
+                          <option value="1">เทอม 1</option>
+                          <option value="2">เทอม 2</option>
+                          <option value="3">เทอม 3</option>
+                        </select>
+                        <input
+                          value={newSemester.academic_year}
+                          onChange={event => setNewSemester(prev => ({ ...prev, academic_year: event.target.value }))}
+                          inputMode="numeric"
+                          placeholder="ปีการศึกษา เช่น 2568"
+                          className="w-full rounded-xl border px-3 py-3 text-[color:var(--text)] shadow-sm outline-none transition placeholder:text-[color:var(--muted)] focus:ring-2"
+                          style={{
+                            borderColor: 'var(--border)',
+                            background: 'var(--surface)',
+                            ['--tw-ring-color' as string]: 'rgba(var(--accent-rgb),0.24)',
+                          }}
+                        />
+                        <button
+                          type="button"
+                          onClick={createSemester}
+                          disabled={isCreatingSemester}
+                          className="rounded-xl border px-4 py-3 text-sm font-semibold transition hover:opacity-90 disabled:opacity-60"
+                          style={{
+                            borderColor: 'rgba(var(--accent-rgb),0.18)',
+                            background: 'rgba(var(--accent-rgb),0.10)',
+                            color: 'var(--accent)',
+                          }}
+                        >
+                          {isCreatingSemester ? 'กำลังเพิ่ม...' : 'เพิ่มเทอม'}
+                        </button>
+                      </div>
+                      {createSemesterError ? (
+                        <p className="mt-2 text-xs text-rose-500">{createSemesterError}</p>
+                      ) : (
+                        <p className="mt-2 text-xs text-[color:var(--muted)]">สร้างแล้วระบบจะเลือกเทอมให้อัตโนมัติ</p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="mb-2 block text-xs font-semibold text-[color:var(--muted)]">ชื่อวิชา</label>
                     <input
-                      value={newSemester.academic_year}
-                      onChange={event => setNewSemester(prev => ({ ...prev, academic_year: event.target.value }))}
-                      inputMode="numeric"
-                      placeholder="ปีการศึกษา เช่น 2568"
-                      className="w-full rounded-xl border px-3 py-3 text-[color:var(--text)] shadow-sm outline-none transition placeholder:text-[color:var(--muted)] focus:ring-2"
+                      type="text"
+                      value={subjectEditor.name}
+                      onChange={event => setSubjectEditor(prev => ({ ...prev, name: event.target.value }))}
+                      placeholder="เช่น คณิตศาสตร์"
+                      className="w-full rounded-xl border px-3.5 py-3 text-[color:var(--text)] shadow-sm outline-none transition placeholder:text-[color:var(--muted)] focus:ring-2"
                       style={{
                         borderColor: 'var(--border)',
-                        background: 'var(--surface)',
+                        background: 'var(--surface-2)',
                         ['--tw-ring-color' as string]: 'rgba(var(--accent-rgb),0.24)',
                       }}
                     />
-                    <button
-                      type="button"
-                      onClick={createSemester}
-                      disabled={isCreatingSemester}
-                      className="rounded-xl border px-4 py-3 text-sm font-semibold transition hover:opacity-90 disabled:opacity-60"
-                      style={{
-                        borderColor: 'rgba(var(--accent-rgb),0.18)',
-                        background: 'rgba(var(--accent-rgb),0.10)',
-                        color: 'var(--accent)',
-                      }}
-                    >
-                      {isCreatingSemester ? 'กำลังเพิ่ม...' : 'เพิ่มเทอม'}
-                    </button>
                   </div>
-                  {createSemesterError ? (
-                    <p className="mt-2 text-xs text-rose-500">{createSemesterError}</p>
-                  ) : (
-                    <p className="mt-2 text-xs text-[color:var(--muted)]">สร้างแล้วระบบจะเลือกเทอมให้อัตโนมัติ</p>
-                  )}
-                </div>
-              </div>
 
-              <div>
-                <label className="mb-2 block text-xs font-semibold text-[color:var(--muted)]">ชื่อวิชา</label>
-                <input
-                  type="text"
-                  value={subjectEditor.name}
-                  onChange={event => setSubjectEditor(prev => ({ ...prev, name: event.target.value }))}
-                  placeholder="เช่น คณิตศาสตร์"
-                  className="w-full rounded-xl border px-3.5 py-3 text-[color:var(--text)] shadow-sm outline-none transition placeholder:text-[color:var(--muted)] focus:ring-2"
-                  style={{
-                    borderColor: 'var(--border)',
-                    background: 'var(--surface-2)',
-                    ['--tw-ring-color' as string]: 'rgba(var(--accent-rgb),0.24)',
-                  }}
-                />
-              </div>
+                  <div>
+                    <label className="mb-2 block text-xs font-semibold text-[color:var(--muted)]">ห้องเรียน</label>
+                    <input
+                      type="text"
+                      value={subjectEditor.room}
+                      onChange={event => setSubjectEditor(prev => ({ ...prev, room: event.target.value }))}
+                      placeholder="เช่น SCB 2401"
+                      className="w-full rounded-xl border px-3.5 py-3 text-[color:var(--text)] shadow-sm outline-none transition placeholder:text-[color:var(--muted)] focus:ring-2"
+                      style={{
+                        borderColor: 'var(--border)',
+                        background: 'var(--surface-2)',
+                        ['--tw-ring-color' as string]: 'rgba(var(--accent-rgb),0.24)',
+                      }}
+                    />
+                  </div>
 
-              <div>
-                <label className="mb-2 block text-xs font-semibold text-[color:var(--muted)]">ห้องเรียน</label>
-                <input
-                  type="text"
-                  value={subjectEditor.room}
-                  onChange={event => setSubjectEditor(prev => ({ ...prev, room: event.target.value }))}
-                  placeholder="เช่น SCB 2401"
-                  className="w-full rounded-xl border px-3.5 py-3 text-[color:var(--text)] shadow-sm outline-none transition placeholder:text-[color:var(--muted)] focus:ring-2"
-                  style={{
-                    borderColor: 'var(--border)',
-                    background: 'var(--surface-2)',
-                    ['--tw-ring-color' as string]: 'rgba(var(--accent-rgb),0.24)',
-                  }}
-                />
-              </div>
-
-              <div>
-                <label className="mb-2 block text-xs font-semibold text-[color:var(--muted)]">วันที่เริ่มเรียน</label>
-                <div className="relative">
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    placeholder="dd/mm/yyyy"
-                    value={toDisplayDateGregorian(subjectEditor.date) ?? subjectEditor.date}
-                    onChange={event => setSubjectEditor(prev => ({ ...prev, date: event.target.value }))}
-                    className="w-full rounded-xl border px-3.5 py-3 pr-11 text-[color:var(--text)] shadow-sm outline-none transition placeholder:text-[color:var(--muted)] focus:ring-2"
-                    style={{
-                      borderColor: 'var(--border)',
-                      background: 'var(--surface-2)',
-                      ['--tw-ring-color' as string]: 'rgba(var(--accent-rgb),0.24)',
-                    }}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const picker = subjectEditorDatePickerRef.current;
-                      if (!picker) return;
-                      if (typeof (picker as any).showPicker === 'function') (picker as any).showPicker();
-                      else picker.click();
-                    }}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-[color:var(--muted)] hover:text-[color:var(--text)]"
-                    aria-label="เลือกวันที่เริ่มเรียน"
-                  >
-                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none">
-                      <rect x="3" y="5" width="18" height="16" rx="2" stroke="currentColor" strokeWidth="1.6" />
-                      <path d="M8 3v4M16 3v4M3 9h18" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-                    </svg>
-                  </button>
-                  <input
-                    ref={subjectEditorDatePickerRef}
-                    type="date"
-                    value={toIsoDate(subjectEditor.date) ?? ''}
-                    onChange={event => {
-                      const nextIso = event.target.value;
-                      setSubjectEditor(prev => ({ ...prev, date: nextIso || prev.date }));
-                    }}
-                    className="absolute inset-0 opacity-0 pointer-events-none"
-                    tabIndex={-1}
-                    aria-hidden="true"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="mb-2 block text-xs font-semibold text-[color:var(--muted)]">เวลาเริ่ม</label>
-                  <input
-                    type="time"
-                    step={300}
-                    value={subjectEditor.startTime}
-                    onChange={event => setSubjectEditor(prev => ({ ...prev, startTime: event.target.value }))}
-                    className="w-full rounded-xl border px-3.5 py-3 text-[color:var(--text)] shadow-sm outline-none transition focus:ring-2"
-                    style={{
-                      borderColor: 'var(--border)',
-                      background: 'var(--surface-2)',
-                      ['--tw-ring-color' as string]: 'rgba(var(--accent-rgb),0.24)',
-                    }}
-                  />
-                </div>
-                <div>
-                  <label className="mb-2 block text-xs font-semibold text-[color:var(--muted)]">เวลาเลิก</label>
-                  <input
-                    type="time"
-                    step={300}
-                    value={subjectEditor.endTime}
-                    onChange={event => setSubjectEditor(prev => ({ ...prev, endTime: event.target.value }))}
-                    className="w-full rounded-xl border px-3.5 py-3 text-[color:var(--text)] shadow-sm outline-none transition focus:ring-2"
-                    style={{
-                      borderColor: 'var(--border)',
-                      background: 'var(--surface-2)',
-                      ['--tw-ring-color' as string]: 'rgba(var(--accent-rgb),0.24)',
-                    }}
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="mb-2 block text-xs font-semibold text-[color:var(--muted)]">สีวิชา</label>
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                  {subjectColorOptions.map(option => {
-                    const active = subjectEditor.color === option.value;
-                    return (
+                  <div>
+                    <label className="mb-2 block text-xs font-semibold text-[color:var(--muted)]">วันที่เริ่มเรียน</label>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        placeholder="dd/mm/yyyy"
+                        value={toDisplayDateGregorian(subjectEditor.date) ?? subjectEditor.date}
+                        onChange={event => setSubjectEditor(prev => ({ ...prev, date: event.target.value }))}
+                        className="w-full rounded-xl border px-3.5 py-3 pr-11 text-[color:var(--text)] shadow-sm outline-none transition placeholder:text-[color:var(--muted)] focus:ring-2"
+                        style={{
+                          borderColor: 'var(--border)',
+                          background: 'var(--surface-2)',
+                          ['--tw-ring-color' as string]: 'rgba(var(--accent-rgb),0.24)',
+                        }}
+                      />
                       <button
-                        key={option.value}
                         type="button"
-                        onClick={() => setSubjectEditor(prev => ({ ...prev, color: option.value }))}
-                        className="rounded-xl border px-3 py-2.5 text-left text-xs font-semibold transition"
-                        style={
-                          active
-                            ? {
-                                borderColor: option.value,
-                                background: `${option.value}18`,
-                                color: 'var(--text)',
-                                boxShadow: `0 0 0 1px ${option.value}40 inset`
-                              }
-                            : {
-                                borderColor: 'var(--border)',
-                                background: 'var(--surface-2)',
-                                color: 'var(--muted)'
-                              }
-                        }
+                        onClick={() => {
+                          const picker = subjectEditorDatePickerRef.current;
+                          if (!picker) return;
+                          if (typeof (picker as any).showPicker === 'function') (picker as any).showPicker();
+                          else picker.click();
+                        }}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-[color:var(--muted)] hover:text-[color:var(--text)]"
+                        aria-label="เลือกวันที่เริ่มเรียน"
                       >
-                        <span className="flex items-center gap-2">
-                          <span className="h-3.5 w-3.5 rounded-full shadow-sm" style={{ backgroundColor: option.value }} />
-                          {option.label}
-                        </span>
+                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none">
+                          <rect x="3" y="5" width="18" height="16" rx="2" stroke="currentColor" strokeWidth="1.6" />
+                          <path d="M8 3v4M16 3v4M3 9h18" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                        </svg>
                       </button>
-                    );
-                  })}
+                      <input
+                        ref={subjectEditorDatePickerRef}
+                        type="date"
+                        value={toIsoDate(subjectEditor.date) ?? ''}
+                        onChange={event => {
+                          const nextIso = event.target.value;
+                          setSubjectEditor(prev => ({ ...prev, date: nextIso || prev.date }));
+                        }}
+                        className="absolute inset-0 opacity-0 pointer-events-none"
+                        tabIndex={-1}
+                        aria-hidden="true"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="mb-2 block text-xs font-semibold text-[color:var(--muted)]">เวลาเริ่ม</label>
+                      <select
+                        value={subjectEditor.startTime}
+                        onChange={event => setSubjectEditor(prev => ({ ...prev, startTime: event.target.value }))}
+                        className="w-full rounded-xl border px-3.5 py-3 text-[color:var(--text)] shadow-sm outline-none transition focus:ring-2 font-mono tabular-nums"
+                        style={{
+                          borderColor: 'var(--border)',
+                          background: 'var(--surface-2)',
+                          ['--tw-ring-color' as string]: 'rgba(var(--accent-rgb),0.24)',
+                        }}
+                      >
+                        <option value="">เลือกเวลา</option>
+                        {overviewTimeOptions.map(option => (
+                          <option key={option} value={option}>
+                            {formatThaiTimeOptionLabel(option)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="mb-2 block text-xs font-semibold text-[color:var(--muted)]">เวลาเลิก</label>
+                      <select
+                        value={subjectEditor.endTime}
+                        onChange={event => setSubjectEditor(prev => ({ ...prev, endTime: event.target.value }))}
+                        className="w-full rounded-xl border px-3.5 py-3 text-[color:var(--text)] shadow-sm outline-none transition focus:ring-2 font-mono tabular-nums"
+                        style={{
+                          borderColor: 'var(--border)',
+                          background: 'var(--surface-2)',
+                          ['--tw-ring-color' as string]: 'rgba(var(--accent-rgb),0.24)',
+                        }}
+                      >
+                        <option value="">เลือกเวลา</option>
+                        {overviewTimeOptions.map(option => (
+                          <option key={option} value={option}>
+                            {formatThaiTimeOptionLabel(option)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="mb-2 block text-xs font-semibold text-[color:var(--muted)]">สีวิชา</label>
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                      {subjectColorOptions.map(option => {
+                        const active = subjectEditor.color === option.value;
+                        return (
+                          <button
+                            key={option.value}
+                            type="button"
+                            onClick={() => setSubjectEditor(prev => ({ ...prev, color: option.value }))}
+                            className="rounded-xl border px-3 py-2.5 text-left text-xs font-semibold transition"
+                            style={
+                              active
+                                ? {
+                                    borderColor: option.value,
+                                    background: `${option.value}18`,
+                                    color: 'var(--text)',
+                                    boxShadow: `0 0 0 1px ${option.value}40 inset`,
+                                  }
+                                : {
+                                    borderColor: 'var(--border)',
+                                    background: 'var(--surface-2)',
+                                    color: 'var(--muted)',
+                                  }
+                            }
+                          >
+                            <span className="flex items-center gap-2">
+                              <span className="h-3.5 w-3.5 rounded-full shadow-sm" style={{ backgroundColor: option.value }} />
+                              {option.label}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={closeSubjectEditor}
+                        className="min-w-[120px] flex-1 rounded-xl border px-4 py-2.5 text-sm font-semibold transition hover:opacity-75 sm:flex-none"
+                        style={{ borderColor: 'var(--border)', background: 'var(--surface-2)', color: 'var(--text)' }}
+                      >
+                        ยกเลิก
+                      </button>
+                      <button
+                        type="button"
+                        onClick={saveSubjectEditor}
+                        disabled={subjectEditorSaving}
+                        className="min-w-[132px] flex-1 rounded-xl px-5 py-2.5 text-sm font-bold shadow-sm transition hover:-translate-y-0.5 disabled:opacity-60 sm:flex-none"
+                        style={{
+                          background: 'var(--accent)',
+                          color: 'var(--on-accent)',
+                          WebkitTextFillColor: 'var(--on-accent)',
+                        }}
+                      >
+                        {subjectEditorSaving ? 'กำลังบันทึก...' : subjectEditor.subjectId ? 'บันทึกวิชา' : 'เพิ่มวิชา'}
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
-
-            <div
-              className="sticky bottom-0 -mx-5 mt-6 flex items-center justify-end gap-2 border-t px-5 py-4 sm:-mx-6 sm:px-6"
-              style={{
-                borderColor: 'var(--border)',
-                background: 'color-mix(in srgb, var(--surface) 94%, transparent)',
-                backdropFilter: 'blur(10px)',
-                paddingBottom: 'calc(1rem + env(safe-area-inset-bottom, 0px))',
-              }}
-            >
-              <button
-                type="button"
-                onClick={closeSubjectEditor}
-                className="rounded-xl border px-4 py-2.5 text-sm font-semibold transition hover:opacity-75"
-                style={{ borderColor: 'var(--border)', background: 'var(--surface-2)', color: 'var(--text)' }}
-              >
-                ยกเลิก
-              </button>
-              <button
-                type="button"
-                onClick={saveSubjectEditor}
-                disabled={subjectEditorSaving}
-                className="rounded-xl px-5 py-2.5 text-sm font-bold shadow-sm transition hover:-translate-y-0.5 disabled:opacity-60"
-                style={{
-                  background: 'var(--accent)',
-                  color: 'var(--on-accent)',
-                  WebkitTextFillColor: 'var(--on-accent)',
-                }}
-              >
-                {subjectEditorSaving ? 'กำลังบันทึก...' : subjectEditor.subjectId ? 'บันทึกวิชา' : 'เพิ่มวิชา'}
-              </button>
-            </div>
-            </div>
-          </div>
           </div>
         </div>
       )}

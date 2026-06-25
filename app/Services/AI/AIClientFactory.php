@@ -18,8 +18,13 @@ class AIClientFactory
 
     public function groq(): ClientContract
     {
+        $apiKey = (string) ($this->config['groq']['api_key'] ?? env('GROQ_API_KEY') ?? '');
+        if (trim($apiKey) === '') {
+            throw new \RuntimeException('Groq API key is missing.');
+        }
+
         return OpenAI::factory()
-            ->withApiKey((string) ($this->config['groq']['api_key'] ?? ''))
+            ->withApiKey($apiKey)
             ->withBaseUri((string) ($this->config['groq']['base_uri'] ?? 'https://api.groq.com/openai/v1'))
             ->make();
     }

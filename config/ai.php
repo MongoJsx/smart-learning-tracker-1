@@ -2,7 +2,8 @@
 
 return [
     'provider' => env('AI_PROVIDER', 'gemini'),
-    'career_provider' => env('CAREER_AI_PROVIDER', 'groq'),
+    // 'career_provider' => env('CAREER_AI_PROVIDER', 'gemini'),
+    'career_provider' => env('AI_CAREER_PROVIDER', 'groq'),
     'openai' => [
         'api_key' => env('OPENAI_API_KEY'),
         'summary_model' => env('SUMMARIZATION_MODEL', 'gpt-4o-mini'),
@@ -10,7 +11,7 @@ return [
     ],
     'groq' => [
         'api_key' => env('GROQ_API_KEY'),
-        'model' => env('GROQ_MODEL', 'llama-3.3-70b-versatile'),
+        'model' => env('GROQ_MODEL', 'llama-3.1-8b-instant'),
         'base_uri' => env('GROQ_BASE_URI', 'https://api.groq.com/openai/v1'),
     ],
     'gemini' => [

@@ -1330,7 +1330,7 @@ const handleDelete = async (id: number) => {
 
             <div
               className={isPopupVariant ? 'overflow-y-auto px-5 py-3' : 'overflow-y-auto px-4 py-3.5 sm:px-6 sm:py-5'}
-              style={{ paddingBottom: 'calc(5rem + env(safe-area-inset-bottom, 0px))' }}
+              style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom, 0px))' }}
             >
               {errorMsg && (
                 <div className="mb-4 rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
@@ -1443,6 +1443,23 @@ const handleDelete = async (id: number) => {
                       </button>
                     ))}
                     <input type="hidden" {...register('color')} />
+                  </div>
+                  <div className="mt-3 flex flex-wrap justify-end gap-3">
+                    <button
+                      type="button"
+                      onClick={closeCreateModal}
+                      className="min-w-[120px] flex-1 rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface)] px-5 py-2.5 text-sm font-semibold text-muted transition hover:text-[color:var(--text)] sm:flex-none"
+                    >
+                      ยกเลิก
+                    </button>
+                    <button
+                      type="submit"
+                      form="subject-form"
+                      className="btn-primary min-w-[140px] flex-1 px-6 py-2.5 text-sm disabled:opacity-60 sm:flex-none"
+                      disabled={isSubmitting || isLoadingSemesters || semesterOptions.length === 0}
+                    >
+                      {isSubmitting ? (editingSubject ? 'กำลังบันทึก...' : 'กำลังเพิ่ม...') : (editingSubject ? 'บันทึกการแก้ไข' : 'บันทึกรายวิชา')}
+                    </button>
                   </div>
                 </div>
 
@@ -1580,28 +1597,6 @@ const handleDelete = async (id: number) => {
               </form>
             </div>
 
-            <div
-              className={`sticky bottom-0 flex justify-end gap-3 border-t border-[color:var(--border)] bg-[color:var(--surface)]/95 backdrop-blur-sm ${
-                isPopupVariant ? 'px-5 py-3' : 'px-4 py-3 sm:px-6 sm:py-3.5'
-              }`}
-              style={{ paddingBottom: 'calc(0.875rem + env(safe-area-inset-bottom, 0px))' }}
-            >
-              <button
-                type="button"
-                onClick={closeCreateModal}
-                className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface)] px-5 py-2.5 text-sm font-semibold text-muted transition hover:text-[color:var(--text)]"
-              >
-                ยกเลิก
-              </button>
-              <button
-                type="submit"
-                form="subject-form"
-                className="btn-primary px-6 py-2.5 text-sm disabled:opacity-60"
-                disabled={isSubmitting || isLoadingSemesters || semesterOptions.length === 0}
-              >
-                {isSubmitting ? (editingSubject ? 'กำลังบันทึก...' : 'กำลังเพิ่ม...') : (editingSubject ? 'บันทึกการแก้ไข' : 'บันทึกรายวิชา')}
-              </button>
-            </div>
           </div>
         </div>
       )}

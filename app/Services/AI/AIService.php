@@ -77,7 +77,7 @@ class AIService
     {
         $questionCount = $preferences['question_count'] ?? 5;
         $difficulty = $preferences['difficulty'] ?? 'medium';
-        $types = $preferences['question_types'] ?? ['multiple_choice', 'short_answer'];
+        $types = $preferences['question_types'] ?? ['multiple_choice'];
         $contextPayload = $this->quizSourceContext($subject);
         $typeHint = implode(', ', $types);
         $typeMixHint = in_array('multiple_choice', $types, true) && in_array('short_answer', $types, true)
@@ -145,7 +145,7 @@ class AIService
         $text = $this->normalizeToUtf8($text);
         $questionCount = $preferences['question_count'] ?? 5;
         $difficulty = $preferences['difficulty'] ?? 'medium';
-        $types = $preferences['question_types'] ?? ['multiple_choice', 'short_answer'];
+        $types = $preferences['question_types'] ?? ['multiple_choice'];
         $titleHint = trim((string) ($preferences['title'] ?? ''));
         $context = $this->trimContext($text, 4000);
         $typeHint = implode(', ', $types);
@@ -169,6 +169,7 @@ class AIService
         );
 
         $decoded = null;
+        $usedTextFallback = false;
         if ($this->hasAnyAIKey()) {
             try {
                 if ($this->useGeminiForQuiz()) {
@@ -199,6 +200,8 @@ class AIService
                 $types,
                 $titleHint !== '' ? $titleHint : ($subject->name !== '' ? 'แบบฝึกหัด '.$subject->name : 'แบบฝึกหัดจากเอกสาร')
             );
+            $decoded['description'] = null;
+            $usedTextFallback = true;
         }
 
         if ($titleHint !== '' && empty($decoded['title'])) {
@@ -207,7 +210,78 @@ class AIService
 
         return $this->buildQuizPayload($decoded, $subject, $questionCount, $difficulty, $types, [
             'source' => 'document',
+            'fallback_mode' => $usedTextFallback ? 'document-best-effort' : null,
+            'fallback_message' => $usedTextFallback ? 'สร้างแบบฝึกหัดจากข้อความจริงในเอกสารเรียบร้อยแล้ว' : null,
         ]);
+    }
+
+    /**
+     * @param  array<string,mixed>  $preferences
+     * @return array<string,mixed>
+     */
+    public function generateFallbackQuizFromDocument(
+        Subject $subject,
+        UploadedFile $file,
+        array $preferences,
+        ?string $reason = null,
+        ?string $sourceText = null
+    ): array
+    {
+        $questionCount = $preferences['question_count'] ?? 5;
+        $difficulty = $preferences['difficulty'] ?? 'medium';
+        $types = $preferences['question_types'] ?? ['multiple_choice'];
+        $titleHint = trim((string) ($preferences['title'] ?? ''));
+        $fileLabel = trim(pathinfo($file->getClientOriginalName(), PATHINFO_FILENAME));
+        $subjectName = trim((string) $subject->name);
+        $normalizedSourceText = trim($this->normalizeToUtf8((string) $sourceText));
+        $hasSourceText = $normalizedSourceText !== '' && ! $this->isLikelyGarbledText($normalizedSourceText);
+
+        $seedLines = array_values(array_filter([
+            $subjectName !== '' ? "วิชา: {$subjectName}" : null,
+            $fileLabel !== '' ? "ชื่อเอกสาร: {$fileLabel}" : null,
+            'เอกสารต้นฉบับไม่สามารถวิเคราะห์ข้อความได้ครบถ้วนจากบริการ AI ในขณะนี้',
+            'ให้ใช้แบบฝึกหัดชุดนี้เพื่อทบทวนหัวข้อสำคัญ สรุปแนวคิดหลัก และตรวจความเข้าใจเบื้องต้น',
+            $fileLabel !== '' ? "ลองเปิดเอกสาร {$fileLabel} ควบคู่กับการทำแบบฝึกหัดเพื่อเติมคำตอบจากเนื้อหาจริง" : null,
+        ]));
+
+        $seedText = $hasSourceText ? $this->trimContext($normalizedSourceText, 4000) : implode("\n", $seedLines);
+        $fallbackTitle = $titleHint !== ''
+            ? $titleHint
+            : ($subjectName !== '' ? "แบบฝึกหัด {$subjectName} จากเอกสาร" : 'แบบฝึกหัดจากเอกสาร');
+        $decoded = $this->fallbackQuizFromText($seedText, (int) $questionCount, (array) $types, $fallbackTitle);
+        $decoded['description'] = null;
+
+        return $this->buildQuizPayload($decoded, $subject, (int) $questionCount, (string) $difficulty, (array) $types, [
+            'source' => 'document',
+            'fallback_mode' => $hasSourceText ? 'document-best-effort' : 'document-shell',
+            'fallback_message' => $hasSourceText
+                ? 'สร้างแบบฝึกหัดจากข้อความที่อ่านได้ในเอกสารให้แล้ว'
+                : 'สร้างแบบฝึกหัดเบื้องต้นให้แล้ว เนื่องจากระบบยังอ่านเนื้อหาในเอกสารนี้ไม่สำเร็จ',
+            'fallback_reason' => $this->clipText((string) ($reason ?: 'unknown'), 180),
+        ]);
+    }
+
+    public function extractDocumentTextBestEffort(UploadedFile $file): ?string
+    {
+        $text = $this->extractLocalText($file);
+        if (is_string($text)) {
+            $text = trim($this->normalizeToUtf8($text));
+            if ($text !== '' && ! $this->isLikelyGarbledText($text)) {
+                return $text;
+            }
+        }
+
+        $loose = $this->extractLooseText($file);
+        if (! is_string($loose)) {
+            return null;
+        }
+
+        $loose = trim($this->normalizeToUtf8($loose));
+        if ($loose === '' || $this->isLikelyGarbledText($loose)) {
+            return null;
+        }
+
+        return $loose;
     }
 
     /**
@@ -259,25 +333,30 @@ class AIService
 
         $lines = collect($subjects)->map(function (array $subject) {
             $name = $subject['name'] ?? 'Subject';
-            $summaryCount = $subject['summary_count'] ?? 0;
-            $studyHours = $subject['study_hours'] ?? 0;
-            $logCount = $subject['study_log_count'] ?? 0;
-            $summaryExcerpt = $subject['summary_excerpt'] ?? null;
             $latestQuizScore = $subject['latest_quiz_score'] ?? null;
             $avgQuizScore = $subject['avg_quiz_score'] ?? null;
             $quizAttemptCount = $subject['quiz_attempt_count'] ?? 0;
+            $maxQuizScore = $subject['max_quiz_score'] ?? null;
+            $passRate = $subject['pass_rate'] ?? null;
+            $passedCount = $subject['passed_count'] ?? 0;
 
-            $line = "- {$name} (สรุป {$summaryCount} ครั้ง, เรียน {$studyHours} ชม., บันทึก {$logCount} ครั้ง, ทำข้อสอบ {$quizAttemptCount} ครั้ง";
+            $line = "- {$name} (ทำข้อสอบ {$quizAttemptCount} ครั้ง";
             if ($latestQuizScore !== null && $latestQuizScore !== '') {
                 $line .= ", คะแนนล่าสุด {$latestQuizScore}";
             }
             if ($avgQuizScore !== null && $avgQuizScore !== '') {
                 $line .= ", คะแนนเฉลี่ย {$avgQuizScore}";
             }
-            $line .= ')';
-            if ($summaryExcerpt) {
-                $line .= "\n  ตัวอย่างสรุป: ".$this->trimContext((string) $summaryExcerpt, 300);
+            if ($maxQuizScore !== null && $maxQuizScore !== '') {
+                $line .= ", คะแนนสูงสุด {$maxQuizScore}";
             }
+            if ($passRate !== null && $passRate !== '') {
+                $line .= ", อัตราผ่าน {$passRate}%";
+            }
+            if ($passedCount !== null && $passedCount !== '') {
+                $line .= ", ผ่าน {$passedCount} ครั้ง";
+            }
+            $line .= ')';
             return $line;
         })->implode("\n");
 
@@ -319,54 +398,34 @@ class AIService
             .$latestQuizSection
             .$latestQuizAnalysisSection
             .$weakSubjectsSection
-            ."ช่วยแนะนำเส้นทางอาชีพที่เหมาะสมไม่เกิน 3 รายการ โดยใช้เฉพาะผลแบบฝึกหัดจริงเป็นหลัก: คะแนนเฉลี่ย คะแนนล่าสุด อัตราผ่าน และจำนวนครั้งที่ทำ "
-            ."ข้อมูลการเรียนหรือสรุปใช้เป็นบริบทเสริมเท่านั้น ห้ามใช้แทนหลักฐานจากแบบฝึกหัด "
+            ."ช่วยแนะนำเส้นทางอาชีพที่เหมาะสมไม่เกิน 3 รายการ โดยใช้เฉพาะผลคะแนนจากการทำข้อสอบจริงเป็นหลัก: คะแนนเฉลี่ย คะแนนล่าสุด คะแนนสูงสุด อัตราผ่าน และจำนวนครั้งที่ทำ "
+            ."ห้ามใช้ข้อมูลสรุปบทเรียน ชั่วโมงเรียน หรือการคาดเดาทั่วไปมาแทนหลักฐานจากคะแนนข้อสอบ "
             ."ให้ระบุทักษะที่ควรพัฒนาเพิ่มเติมแบบเฉพาะเจาะจง และเหตุผลสั้น ๆ\n\n"
             ."ห้ามอ้างรายวิชา ความถนัด ประสบการณ์ หรืออาชีพจากข้อมูลที่ไม่มีในหลักฐานด้านบน "
             ."subjects ของทุกคำแนะนำต้องเป็นชื่อวิชาที่ปรากฏในหลักฐานเท่านั้น "
             ."ถ้าหลักฐานไม่พอหรือคะแนนยังไม่ชี้ความถนัดอย่างน่าเชื่อถือ ให้คืน recommendations เป็น [] และห้ามเดา "
             ."ถ้าคะแนนล่าสุดยังไม่สูง ให้สะท้อนเป็นทักษะที่ควรพัฒนา ไม่ใช่กล่าวว่าผู้ใช้ถนัดวิชานั้น\n\n"
-            ."ตอบกลับเป็น JSON เท่านั้นในรูปแบบ:\n{\n  \"recommendations\": [\n    {\n      \"career\": \"ชื่ออาชีพ\",\n      \"skills\": \"ทักษะที่ควรพัฒนา (คั่นด้วยจุลภาค)\",\n      \"subjects\": \"รายวิชาที่เกี่ยวข้อง (คั่นด้วยจุลภาค)\",\n      \"score\": 0-100,\n      \"reason\": \"เหตุผลสั้น ๆ\"\n    }\n  ]\n}\n\nกำหนด score เป็นตัวเลข 0-100 และให้ครบ 3 รายการ";
+            ."ตอบกลับเป็น JSON เท่านั้นในรูปแบบ:\n{\n  \"recommendations\": [\n    {\n      \"career\": \"ชื่ออาชีพ\",\n      \"skills\": \"ทักษะที่ควรพัฒนา (คั่นด้วยจุลภาค)\",\n      \"subjects\": \"รายวิชาที่เกี่ยวข้อง (คั่นด้วยจุลภาค)\",\n      \"score\": 0-100,\n      \"reason\": \"เหตุผลสั้น ๆ\"\n    }\n  ]\n}\n\nกำหนด score เป็นตัวเลข 0-100 และให้ไม่เกิน 3 รายการ ถ้าข้อมูลไม่พอให้คืน recommendations เป็น []";
 
-        if ($this->shouldUseGroqForCareer()) {
+        $careerProvider = $this->careerProvider();
+
+        if ($careerProvider === 'groq') {
             if (! $this->hasGroqKey()) {
                 throw new RuntimeException('ยังไม่ได้ตั้งค่า GROQ_API_KEY สำหรับวิเคราะห์อาชีพ');
             }
-            $client = $this->factory->groq();
-            $response = $client->chat()->create([
-                'model' => $this->groqModel(),
-                'messages' => [
-                    [
-                        'role' => 'system',
-                        'content' => 'You are a career advisor. Provide concise, practical recommendations in Thai. Reply with JSON only.',
-                    ],
-                    [
-                        'role' => 'user',
-                        'content' => $prompt."\n\nสำคัญ: ตอบเป็น JSON object เท่านั้น ห้ามมีข้อความอื่นก่อนหรือหลัง JSON",
-                    ],
-                ],
-            ]);
-            $content = $response->choices[0]->message->content ?? '{}';
+
+            $content = $this->callGroqCareerRecommendations($prompt);
+        } elseif (in_array($careerProvider, ['gemini', 'google'], true)) {
+            if (! $this->hasGeminiKey()) {
+                throw new RuntimeException('ยังไม่ได้ตั้งค่า GEMINI_API_KEY สำหรับวิเคราะห์อาชีพ');
+            }
+
+            $content = $this->callGeminiCareerRecommendations($prompt);
         } elseif ($this->hasGroqKey()) {
-            $client = $this->factory->groq();
-            $response = $client->chat()->create([
-                'model' => $this->groqModel(),
-                'messages' => [
-                    [
-                        'role' => 'system',
-                        'content' => 'You are a career advisor. Provide concise, practical recommendations in Thai. Reply with JSON only.',
-                    ],
-                    [
-                        'role' => 'user',
-                        'content' => $prompt."\n\nสำคัญ: ตอบเป็น JSON object เท่านั้น ห้ามมีข้อความอื่นก่อนหรือหลัง JSON",
-                    ],
-                ],
-            ]);
-            $content = $response->choices[0]->message->content ?? '{}';
-        } elseif ($this->useGemini()) {
-            $content = $this->callGemini(
-                "You are a career advisor. Provide concise, practical recommendations in Thai.\n\n{$prompt}"
-            );
+            // Prefer Groq for career analysis whenever GROQ_API_KEY exists.
+            $content = $this->callGroqCareerRecommendations($prompt);
+        } elseif ($this->hasGeminiKey()) {
+            $content = $this->callGeminiCareerRecommendations($prompt);
         } else {
             $client = $this->textClient();
             $response = $client->chat()->create([
@@ -390,7 +449,7 @@ class AIService
         $items = $decoded['recommendations'] ?? [];
 
         if (! is_array($items)) {
-            return [];
+            $items = [];
         }
 
         $allowedSubjects = collect($subjects)
@@ -399,7 +458,7 @@ class AIService
             ->map(fn ($name) => trim((string) $name))
             ->values();
 
-        return collect($items)->map(function (array $item) use ($allowedSubjects) {
+        $out = collect($items)->map(function (array $item) use ($allowedSubjects) {
             $career = trim((string) ($item['career'] ?? ''));
             $skills = $item['skills'] ?? '';
             $subjects = $item['subjects'] ?? '';
@@ -432,11 +491,62 @@ class AIService
                 'reason' => $reason,
             ];
         })->filter()->take(3)->values()->all();
+
+        // No mockup / no deterministic fallback.
+        // If AI does not return valid recommendations from real quiz scores, return an empty result.
+        if (empty($out)) {
+            return [];
+        }
+
+        return $out;
+    }
+
+    private function careerProvider(): string
+    {
+        return strtolower((string) (
+            config('ai.career_provider')
+            ?: env('AI_CAREER_PROVIDER')
+            ?: config('ai.provider')
+            ?: env('AI_PROVIDER')
+            ?: ''
+        ));
     }
 
     private function shouldUseGroqForCareer(): bool
     {
-        return strtolower((string) config('ai.career_provider')) === 'groq';
+        return $this->careerProvider() === 'groq';
+    }
+
+    private function shouldUseGeminiForCareer(): bool
+    {
+        return in_array($this->careerProvider(), ['gemini', 'google'], true);
+    }
+
+    private function callGeminiCareerRecommendations(string $prompt): string
+    {
+        return $this->callGemini(
+            "You are a career advisor. Provide concise, practical recommendations in Thai.\n\n{$prompt}"
+        );
+    }
+
+    private function callGroqCareerRecommendations(string $prompt): string
+    {
+        $client = $this->factory->groq();
+        $response = $client->chat()->create([
+            'model' => $this->groqModel(),
+            'messages' => [
+                [
+                    'role' => 'system',
+                    'content' => 'You are a career advisor. Provide concise, practical recommendations in Thai. Reply with JSON only.',
+                ],
+                [
+                    'role' => 'user',
+                    'content' => $prompt."\n\nสำคัญ: ตอบเป็น JSON object เท่านั้น ห้ามมีข้อความอื่นก่อนหรือหลัง JSON",
+                ],
+            ],
+        ]);
+
+        return $response->choices[0]->message->content ?? '{}';
     }
 
     /**
@@ -459,6 +569,7 @@ class AIService
         $systemPrompt = "You are Smart Room, a Thai study assistant for university students.\n"
             ."Respond in Thai unless the user explicitly asks for another language.\n"
             ."Adopt a polite female persona when replying in Thai and naturally end sentences with 'ค่ะ' where appropriate.\n"
+            ."Answer the latest user message directly and stay on topic.\n"
             ."Be concise, practical, and friendly.\n"
             ."Help with study planning, summaries, homework guidance, revision, and learning motivation.\n"
             ."If the user asks to record or remember something, acknowledge it clearly.\n"
@@ -472,8 +583,41 @@ class AIService
             $systemPrompt .= "\nPreferred tool context: {$toolLabel}.";
         }
 
+        $messages = [
+            ['role' => 'system', 'content' => $systemPrompt],
+        ];
+
+        foreach (collect($history)->take(-12) as $item) {
+            $text = trim((string) ($item['message'] ?? ''));
+            if ($text === '') {
+                continue;
+            }
+
+            $messages[] = [
+                'role' => ($item['sender_type'] ?? 'user') === 'assistant' ? 'assistant' : 'user',
+                'content' => $text,
+            ];
+        }
+
+        if (($messages[array_key_last($messages)]['role'] ?? null) !== 'user'
+            || ($messages[array_key_last($messages)]['content'] ?? null) !== $cleanMessage) {
+            $messages[] = ['role' => 'user', 'content' => $cleanMessage];
+        }
+
+        $reply = '';
+
         try {
-            if ($this->useGemini()) {
+            if ($this->useGroq() || $this->hasGroqKey()) {
+                $client = $this->assistantClient();
+                $response = $client->chat()->create([
+                    'model' => $this->assistantModel(),
+                    'messages' => $messages,
+                    'temperature' => 0.4,
+                    'max_tokens' => 700,
+                ]);
+
+                $reply = trim((string) ($response->choices[0]->message->content ?? ''));
+            } elseif ($this->hasGeminiKey()) {
                 $historyText = collect($history)
                     ->take(-12)
                     ->map(function (array $item) {
@@ -490,40 +634,36 @@ class AIService
                     ."\n\nLatest user message:\n{$cleanMessage}\n\nReply with only the assistant response text.";
 
                 $reply = trim($this->callGemini($prompt));
-            } else {
-                $messages = [
-                    ['role' => 'system', 'content' => $systemPrompt],
-                ];
-
-                foreach (collect($history)->take(-12) as $item) {
-                    $text = trim((string) ($item['message'] ?? ''));
-                    if ($text === '') {
-                        continue;
-                    }
-
-                    $messages[] = [
-                        'role' => ($item['sender_type'] ?? 'user') === 'assistant' ? 'assistant' : 'user',
-                        'content' => $text,
-                    ];
-                }
-
-                if (($messages[array_key_last($messages)]['role'] ?? null) !== 'user'
-                    || ($messages[array_key_last($messages)]['content'] ?? null) !== $cleanMessage) {
-                    $messages[] = ['role' => 'user', 'content' => $cleanMessage];
-                }
-
-                $client = $this->textClient();
-                $response = $client->chat()->create([
-                    'model' => $this->summaryModel(),
-                    'messages' => $messages,
-                ]);
-
-                $reply = trim((string) ($response->choices[0]->message->content ?? ''));
             }
         } catch (\Throwable $e) {
-            // Keep assistant usable even if upstream AI provider is unavailable.
             report($e);
-            $reply = $this->buildAssistantOfflineReply($cleanMessage);
+
+            if ($reply === '' && ! $this->useGroq() && $this->hasGeminiKey()) {
+                try {
+                    $historyText = collect($history)
+                        ->take(-12)
+                        ->map(function (array $item) {
+                            $role = ($item['sender_type'] ?? 'user') === 'assistant' ? 'Assistant' : 'User';
+                            $text = trim((string) ($item['message'] ?? ''));
+                            return $text !== '' ? "{$role}: {$text}" : null;
+                        })
+                        ->filter()
+                        ->implode("\n");
+
+                    $prompt = $systemPrompt
+                        ."\n\nConversation history:\n"
+                        .($historyText !== '' ? $historyText : 'No previous messages.')
+                        ."\n\nLatest user message:\n{$cleanMessage}\n\nReply with only the assistant response text.";
+
+                    $reply = trim($this->callGemini($prompt));
+                } catch (\Throwable $fallbackException) {
+                    report($fallbackException);
+                }
+            }
+
+            if ($reply === '') {
+                $reply = $this->buildAssistantOfflineReply($cleanMessage);
+            }
         }
 
         if ($reply === '') {
@@ -1709,6 +1849,7 @@ class AIService
             return null;
         }
 
+        $toUnicodeMaps = $this->extractPdfToUnicodeMaps($streams);
         $chunks = [];
         foreach ($streams as $stream) {
             if (! is_string($stream) || $stream === '') {
@@ -1745,6 +1886,18 @@ class AIService
                     }
                 }
 
+                preg_match_all('/<([0-9A-Fa-f]+)>\s*Tj/s', $candidate, $hexTextOps);
+                foreach (($hexTextOps[1] ?? []) as $hexToken) {
+                    if (! is_string($hexToken) || $hexToken === '') {
+                        continue;
+                    }
+
+                    $decodedHex = $this->decodePdfHexStringToken($hexToken, $toUnicodeMaps);
+                    if ($decodedHex !== '') {
+                        $chunks[] = $decodedHex;
+                    }
+                }
+
                 preg_match_all('/\[(.*?)\]\s*TJ/s', $candidate, $arrayOps);
                 foreach (($arrayOps[1] ?? []) as $block) {
                     if (! is_string($block) || $block === '') {
@@ -1762,7 +1915,7 @@ class AIService
                         if (! is_string($hexToken) || $hexToken === '') {
                             continue;
                         }
-                        $decodedHex = $this->decodePdfHexStringToken($hexToken);
+                        $decodedHex = $this->decodePdfHexStringToken($hexToken, $toUnicodeMaps);
                         if ($decodedHex !== '') {
                             $chunks[] = $decodedHex;
                         }
@@ -1797,7 +1950,10 @@ class AIService
         return trim($decoded);
     }
 
-    private function decodePdfHexStringToken(string $hexToken): string
+    /**
+     * @param  array<int, array<string, string>>  $toUnicodeMaps
+     */
+    private function decodePdfHexStringToken(string $hexToken, array $toUnicodeMaps = []): string
     {
         $hex = preg_replace('/\s+/', '', $hexToken) ?? '';
         if ($hex === '') {
@@ -1813,7 +1969,248 @@ class AIService
             return '';
         }
 
-        return trim($this->normalizeToUtf8($binary));
+        $decoded = trim($this->normalizeToUtf8($binary));
+        if ($decoded !== '' && ! $this->isLikelyGarbledText($decoded)) {
+            return $decoded;
+        }
+
+        $decodedFromMap = $this->decodePdfHexUsingToUnicodeMaps($hex, $toUnicodeMaps);
+        if ($decodedFromMap !== '') {
+            return $decodedFromMap;
+        }
+
+        return $decoded;
+    }
+
+    /**
+     * @param  array<int, string>  $streams
+     * @return array<int, array<string, string>>
+     */
+    private function extractPdfToUnicodeMaps(array $streams): array
+    {
+        $maps = [];
+
+        foreach ($streams as $stream) {
+            if (! is_string($stream) || $stream === '') {
+                continue;
+            }
+
+            $candidates = [$stream];
+            $decoded = @gzuncompress($stream);
+            if (is_string($decoded) && $decoded !== '') {
+                $candidates[] = $decoded;
+            }
+
+            $inflated = @gzinflate($stream);
+            if (is_string($inflated) && $inflated !== '') {
+                $candidates[] = $inflated;
+            }
+
+            if (str_starts_with($stream, "\x78\x9C") || str_starts_with($stream, "\x78\xDA")) {
+                $alt = @gzuncompress(substr($stream, 2));
+                if (is_string($alt) && $alt !== '') {
+                    $candidates[] = $alt;
+                }
+            }
+
+            foreach ($candidates as $candidate) {
+                if (! is_string($candidate) || $candidate === '') {
+                    continue;
+                }
+
+                if (! str_contains($candidate, 'beginbfchar') && ! str_contains($candidate, 'beginbfrange')) {
+                    continue;
+                }
+
+                $map = $this->parsePdfToUnicodeMap($candidate);
+                if ($map !== []) {
+                    $maps[] = $map;
+                }
+            }
+        }
+
+        return $maps;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function parsePdfToUnicodeMap(string $content): array
+    {
+        $map = [];
+
+        if (preg_match_all('/beginbfchar(.*?)endbfchar/s', $content, $sections)) {
+            foreach (($sections[1] ?? []) as $section) {
+                if (! is_string($section)) {
+                    continue;
+                }
+
+                if (preg_match_all('/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>/', $section, $pairs, PREG_SET_ORDER)) {
+                    foreach ($pairs as $pair) {
+                        $source = strtoupper((string) ($pair[1] ?? ''));
+                        $target = $this->decodePdfUnicodeHex((string) ($pair[2] ?? ''));
+                        if ($source !== '' && $target !== '') {
+                            $map[$source] = $target;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (preg_match_all('/beginbfrange(.*?)endbfrange/s', $content, $sections)) {
+            foreach (($sections[1] ?? []) as $section) {
+                if (! is_string($section)) {
+                    continue;
+                }
+
+                $lines = preg_split('/\r\n|\r|\n/', $section) ?: [];
+                foreach ($lines as $line) {
+                    $line = trim((string) $line);
+                    if ($line === '') {
+                        continue;
+                    }
+
+                    if (preg_match('/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>/', $line, $match)) {
+                        $start = hexdec($match[1]);
+                        $end = hexdec($match[2]);
+                        $targetStart = hexdec($match[3]);
+                        $sourceWidth = strlen($match[1]);
+
+                        for ($code = $start; $code <= $end; $code++) {
+                            $source = strtoupper(str_pad(dechex($code), $sourceWidth, '0', STR_PAD_LEFT));
+                            $targetHex = strtoupper(str_pad(dechex($targetStart + ($code - $start)), 4, '0', STR_PAD_LEFT));
+                            $target = $this->decodePdfUnicodeHex($targetHex);
+                            if ($target !== '') {
+                                $map[$source] = $target;
+                            }
+                        }
+
+                        continue;
+                    }
+
+                    if (preg_match('/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*\[(.*?)\]/', $line, $match)) {
+                        $start = hexdec($match[1]);
+                        $end = hexdec($match[2]);
+                        $sourceWidth = strlen($match[1]);
+                        preg_match_all('/<([0-9A-Fa-f]+)>/', $match[3], $targets);
+                        $targetHexList = $targets[1] ?? [];
+                        $offset = 0;
+
+                        for ($code = $start; $code <= $end; $code++) {
+                            $targetHex = (string) ($targetHexList[$offset] ?? '');
+                            $target = $this->decodePdfUnicodeHex($targetHex);
+                            if ($target !== '') {
+                                $source = strtoupper(str_pad(dechex($code), $sourceWidth, '0', STR_PAD_LEFT));
+                                $map[$source] = $target;
+                            }
+                            $offset++;
+                        }
+                    }
+                }
+            }
+        }
+
+        return $map;
+    }
+
+    private function decodePdfUnicodeHex(string $hex): string
+    {
+        $hex = preg_replace('/\s+/', '', $hex) ?? '';
+        if ($hex === '') {
+            return '';
+        }
+
+        if (strlen($hex) % 2 !== 0) {
+            $hex .= '0';
+        }
+
+        $binary = @hex2bin($hex);
+        if (! is_string($binary) || $binary === '') {
+            return '';
+        }
+
+        $utf16 = $binary;
+        if (! str_starts_with($utf16, "\xFE\xFF") && ! str_starts_with($utf16, "\xFF\xFE")) {
+            $utf16 = "\xFE\xFF".$utf16;
+        }
+
+        $decoded = $this->normalizeToUtf8($utf16);
+        return trim($decoded);
+    }
+
+    /**
+     * @param  array<int, array<string, string>>  $toUnicodeMaps
+     */
+    private function decodePdfHexUsingToUnicodeMaps(string $hex, array $toUnicodeMaps): string
+    {
+        if ($toUnicodeMaps === []) {
+            return '';
+        }
+
+        $best = '';
+        $bestScore = -INF;
+
+        foreach ($toUnicodeMaps as $map) {
+            if (! is_array($map) || $map === []) {
+                continue;
+            }
+
+            $keyLengths = array_values(array_unique(array_map('strlen', array_keys($map))));
+            rsort($keyLengths);
+
+            $decoded = '';
+            $offset = 0;
+            $hexLength = strlen($hex);
+
+            while ($offset < $hexLength) {
+                $matched = false;
+
+                foreach ($keyLengths as $keyLength) {
+                    if ($keyLength <= 0 || ($offset + $keyLength) > $hexLength) {
+                        continue;
+                    }
+
+                    $chunk = strtoupper(substr($hex, $offset, $keyLength));
+                    if (! array_key_exists($chunk, $map)) {
+                        continue;
+                    }
+
+                    $decoded .= $map[$chunk];
+                    $offset += $keyLength;
+                    $matched = true;
+                    break;
+                }
+
+                if (! $matched) {
+                    $offset += 2;
+                }
+            }
+
+            $decoded = trim($decoded);
+            if ($decoded === '') {
+                continue;
+            }
+
+            $score = $this->scoreDecodedPdfText($decoded);
+            if ($score > $bestScore) {
+                $best = $decoded;
+                $bestScore = $score;
+            }
+        }
+
+        return $best;
+    }
+
+    private function scoreDecodedPdfText(string $text): float
+    {
+        $length = max(1, mb_strlen($text, 'UTF-8'));
+        $thai = preg_match_all('/\p{Thai}/u', $text) ?: 0;
+        $latin = preg_match_all('/[A-Za-z]/', $text) ?: 0;
+        $digits = preg_match_all('/\d/', $text) ?: 0;
+        $replacement = preg_match_all('/�/u', $text) ?: 0;
+        $question = preg_match_all('/\?/', $text) ?: 0;
+
+        return (($thai * 4) + $latin + ($digits * 0.5) - ($replacement * 4) - ($question * 0.5)) / $length;
     }
 
     private function findPdfToTextBinary(): ?string
@@ -1961,14 +2358,20 @@ class AIService
         $thaiLetters = preg_match_all('/\p{Thai}/u', $text);
         $asciiLetters = preg_match_all('/[A-Za-z]/', $text);
         $suspiciousPdfOperators = preg_match_all('/\b(?:obj|endobj|stream|endstream|xref|trailer|Tj|TJ)\b/', $text);
+        $boxDrawingChars = preg_match_all('/[\x{2500}-\x{259F}]/u', $text);
+        $commonMojibakeMarkers = preg_match_all('/(?:Ã.|Â.|â€|à¸|à¹|àº|ø|ð|œ|ž|š)/u', $text);
 
         $noiseRatio = (($questionMarks ?: 0) + ($replacementChars ?: 0) + ($invalidSymbols ?: 0)) / $length;
         $letterRatio = ($letters ?: 0) / $length;
         $latinSupplementRatio = ($latinSupplement ?: 0) / $length;
         $meaningfulLetterRatio = (($thaiLetters ?: 0) + ($asciiLetters ?: 0)) / $length;
+        $boxRatio = ($boxDrawingChars ?: 0) / $length;
+        $mojibakeRatio = ($commonMojibakeMarkers ?: 0) / $length;
 
         return $noiseRatio > 0.25
             || $letterRatio < 0.2
+            || $boxRatio > 0.03
+            || $mojibakeRatio > 0.03
             || ($latinSupplementRatio > 0.18 && $meaningfulLetterRatio < 0.35)
             || (($suspiciousPdfOperators ?: 0) >= 3 && $meaningfulLetterRatio < 0.45);
     }
@@ -2286,7 +2689,7 @@ class AIService
 
         return [
             'title' => $title,
-            'description' => 'สร้างอัตโนมัติจากเนื้อหา (โหมดออฟไลน์)',
+            'description' => 'สร้างแบบฝึกหัดจากเนื้อหาที่อ่านได้จากเอกสารนี้',
             'questions' => $questions,
         ];
     }
@@ -3016,22 +3419,22 @@ class AIService
 
     private function useGroq(): bool
     {
-        return config('ai.provider') === 'groq';
+        return strtolower((string) (config('ai.provider') ?: env('AI_PROVIDER'))) === 'groq';
     }
 
     private function hasGeminiKey(): bool
     {
-        return filled(config('ai.gemini.api_key'));
+        return filled(config('ai.gemini.api_key') ?: env('GEMINI_API_KEY'));
     }
 
     private function hasOpenAIKey(): bool
     {
-        return filled(config('ai.openai.api_key'));
+        return filled(config('ai.openai.api_key') ?: env('OPENAI_API_KEY'));
     }
 
     private function hasGroqKey(): bool
     {
-        return filled(config('ai.groq.api_key'));
+        return filled(config('ai.groq.api_key') ?: env('GROQ_API_KEY'));
     }
 
     private function hasAnyAIKey(): bool
@@ -3067,14 +3470,36 @@ class AIService
         return $this->openAISummaryModel();
     }
 
+    private function assistantModel(): string
+    {
+        if ($this->useGroq() || $this->hasGroqKey()) {
+            return $this->groqModel();
+        }
+
+        if ($this->useGemini()) {
+            return $this->geminiModel();
+        }
+
+        return $this->openAISummaryModel();
+    }
+
     private function groqModel(): string
     {
-        return (string) (config('ai.groq.model') ?: 'llama-3.3-70b-versatile');
+        return (string) (config('ai.groq.model') ?: env('GROQ_MODEL') ?: 'llama-3.1-8b-instant');
     }
 
     private function textClient()
     {
         return $this->useGroq() ? $this->factory->groq() : $this->factory->openAI();
+    }
+
+    private function assistantClient()
+    {
+        if ($this->useGroq() || $this->hasGroqKey()) {
+            return $this->factory->groq();
+        }
+
+        return $this->textClient();
     }
 
     private function openAISummaryModel(): string
@@ -3280,28 +3705,78 @@ class AIService
         return collect($questions)
             ->take($questionCount)
             ->map(function (array $question) {
-                $options = $question['options'] ?? null;
-                if (is_string($options)) {
-                    $options = array_values(array_filter(array_map('trim', explode('|', $options))));
-                }
-                if (is_array($options)) {
-                    $options = array_values(array_filter($options, fn ($option) => (string) $option !== ''));
-                }
-
                 $type = $question['question_type'] ?? 'multiple_choice';
                 $allowed = ['multiple_choice', 'true_false', 'short_answer'];
                 if (! in_array($type, $allowed, true)) {
                     $type = 'multiple_choice';
                 }
 
+                $questionText = trim((string) ($question['question_text'] ?? 'Question'));
+                $correctAnswer = trim((string) ($question['correct_answer'] ?? ''));
+                $options = $question['options'] ?? null;
+                if (is_string($options)) {
+                    $options = array_values(array_filter(array_map('trim', explode('|', $options))));
+                }
+                if (is_array($options)) {
+                    $options = array_values(array_filter($options, fn ($option) => trim((string) $option) !== ''));
+                }
+
+                if ($type === 'multiple_choice') {
+                    $options = $this->ensureMultipleChoiceOptions($questionText, $correctAnswer, is_array($options) ? $options : []);
+                } else {
+                    $options = null;
+                }
+
                 return [
-                    'question_text' => $question['question_text'] ?? 'Question',
+                    'question_text' => $questionText !== '' ? $questionText : 'Question',
                     'question_type' => $type,
                     'options' => $options ?: null,
-                    'correct_answer' => $question['correct_answer'] ?? null,
+                    'correct_answer' => $correctAnswer !== '' ? $correctAnswer : null,
                     'explanation' => $question['explanation'] ?? null,
                 ];
             })->values()->all();
+    }
+
+    /**
+     * @param  array<int, string>  $options
+     * @return array<int, string>
+     */
+    private function ensureMultipleChoiceOptions(string $questionText, string $correctAnswer, array $options): array
+    {
+        $cleanOptions = array_values(array_filter(array_map(
+            fn ($option) => $this->trimText((string) $option, 80),
+            $options
+        ), fn (string $option) => $option !== ''));
+
+        if ($cleanOptions !== [] && count($cleanOptions) >= 4) {
+            $cleanOptions = array_values(array_unique($cleanOptions));
+            if ($correctAnswer !== '' && ! in_array($correctAnswer, $cleanOptions, true)) {
+                array_unshift($cleanOptions, $this->trimText($correctAnswer, 80));
+            }
+
+            return array_slice(array_values(array_unique($cleanOptions)), 0, 4);
+        }
+
+        $keywords = $this->extractKeywords(trim($questionText.' '.$correctAnswer));
+        if ($keywords === []) {
+            $keywords = $this->extractKeywords($questionText);
+        }
+
+        $pool = array_values(array_unique(array_filter(array_merge($cleanOptions, $keywords), fn (string $value) => $value !== '')));
+        $answerSeed = $correctAnswer !== '' ? $correctAnswer : ($pool[0] ?? $questionText);
+        $generated = $this->buildOptions($answerSeed !== '' ? $answerSeed : 'ตัวเลือก', $pool, 4);
+
+        if ($correctAnswer !== '' && ! in_array($correctAnswer, $generated, true)) {
+            array_unshift($generated, $this->trimText($correctAnswer, 80));
+        }
+
+        $generated = array_values(array_unique(array_filter($generated, fn (string $value) => $value !== '')));
+        while (count($generated) < 4) {
+            $generated[] = 'อื่นๆ';
+            $generated = array_values(array_unique($generated));
+        }
+
+        return array_slice($generated, 0, 4);
     }
 
     /**

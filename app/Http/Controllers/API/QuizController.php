@@ -73,6 +73,7 @@ class QuizController extends Controller
     {
         $this->authorizeSubject($subject);
         $this->ensureQuizQuestionColumnsSupportLongText();
+        $usedFallbackQuiz = false;
 
         $data = request()->validate([
             'file' => ['required', 'file', 'max:51200'],
@@ -81,6 +82,7 @@ class QuizController extends Controller
             'question_types' => ['nullable', 'array'],
             'question_types.*' => ['in:multiple_choice,true_false,short_answer'],
             'question_count' => ['nullable', 'integer', 'min:3', 'max:50'],
+            'extracted_text' => ['nullable', 'string'],
         ]);
 
         /** @var UploadedFile $file */
@@ -92,17 +94,26 @@ class QuizController extends Controller
         }
 
         try {
-            $extract = $this->aiService->extractDocumentText($file);
-            $text = trim((string) ($extract['text'] ?? ''));
+            $text = trim((string) ($data['extracted_text'] ?? ''));
+            if ($text === '') {
+                $extract = $this->aiService->extractDocumentText($file);
+                $text = trim((string) ($extract['text'] ?? ''));
+            }
+
             if ($text === '') {
                 throw new \RuntimeException('ไม่สามารถดึงข้อความจากไฟล์ได้');
             }
 
             $quizDto = $this->aiService->generateQuizFromText($subject, $text, $data);
         } catch (\Throwable $e) {
-            return response()->json([
-                'message' => $e->getMessage() ?: 'ไม่สามารถสร้างข้อสอบจากไฟล์ได้',
-            ], 422);
+            $bestEffortText = $this->aiService->extractDocumentTextBestEffort($file);
+            if (! is_string($bestEffortText) || trim($bestEffortText) === '') {
+                return response()->json([
+                    'message' => 'ระบบยังอ่านเนื้อหาจริงจากไฟล์นี้ไม่ได้ จึงยังไม่สร้างแบบฝึกหัด กรุณาใช้ไฟล์ DOCX, TXT หรือ PDF ที่คัดลอกข้อความได้',
+                ], 422);
+            }
+            $quizDto = $this->aiService->generateFallbackQuizFromDocument($subject, $file, $data, $e->getMessage(), $bestEffortText);
+            $usedFallbackQuiz = true;
         }
 
         $storedPath = $file->store('study-files/'.$subject->id, 'public');
@@ -155,7 +166,16 @@ class QuizController extends Controller
             ], 422);
         }
 
-        return response()->json(new QuizResource($quiz->load('questions')), 201);
+        $resource = new QuizResource($quiz->load('questions'));
+
+        return response()->json([
+            ...$resource->resolve(request()),
+            'message' => $usedFallbackQuiz
+                ? (($quizDto['metadata']['fallback_mode'] ?? null) === 'document-best-effort'
+                    ? 'สร้างแบบฝึกหัดจากข้อความที่อ่านได้ในเอกสารเรียบร้อยแล้ว'
+                    : 'สร้างแบบฝึกหัดเบื้องต้นเรียบร้อยแล้ว เนื่องจากระบบยังอ่านเนื้อหาในเอกสารไม่สำเร็จ')
+                : 'สร้างแบบฝึกหัดจากเอกสารเรียบร้อยแล้ว',
+        ], 201);
     }
 
     public function show(Quiz $quiz): QuizResource

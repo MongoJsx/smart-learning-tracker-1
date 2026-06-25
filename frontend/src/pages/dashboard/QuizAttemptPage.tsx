@@ -52,6 +52,23 @@ const stripTrailingEllipsis = (value?: string | null) => {
   return value.replace(/\s*\.\.\.\s*$/, '').trimEnd();
 };
 
+const normalizeQuizDescription = (value?: string | null) => {
+  const text = typeof value === 'string' ? value.trim() : '';
+  if (!text) return '';
+
+  const lowered = text.toLowerCase();
+  if (
+    lowered.includes('สร้างแบบฝึกหัด') ||
+    lowered.includes('ข้อความจริง') ||
+    lowered.includes('เอกสาร') ||
+    lowered.includes('readable')
+  ) {
+    return '';
+  }
+
+  return text;
+};
+
 const normalizeAttemptResult = (payload: AttemptApiResponse | null | undefined): AttemptResult => {
   const rawAnswers = Array.isArray(payload?.answers)
     ? payload?.answers
@@ -130,12 +147,17 @@ export const QuizAttemptPage = () => {
     }
   };
 
+  const closeResultModal = () => {
+    setShowModal(false);
+    navigate('/quizzes');
+  };
+
   if (!quiz) {
     return <p className="text-muted">กำลังโหลดแบบฝึกหัด...</p>;
   }
 
   return (
-    <div className="mx-auto w-full max-w-7xl space-y-6">
+    <div className="mx-auto w-full max-w-7xl space-y-6 pb-[calc(124px+env(safe-area-inset-bottom,0px))] lg:pb-8">
       <div className="flex items-center justify-between">
         <button
           onClick={() => navigate(-1)}
@@ -147,7 +169,9 @@ export const QuizAttemptPage = () => {
       <div className="w-full rounded-[32px] border border-muted surface p-5 shadow-glow sm:p-6 lg:p-8">
         <header>
           <h2 className="text-2xl font-semibold text-[color:var(--text)] sm:text-3xl">{quiz.title}</h2>
-          <p className="text-sm text-muted">{quiz.description ?? 'ไม่มีคำอธิบาย'}</p>
+          {normalizeQuizDescription(quiz.description) ? (
+            <p className="text-sm text-muted">{normalizeQuizDescription(quiz.description)}</p>
+          ) : null}
         </header>
         {submitError ? (
           <div className="rounded-2xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-500">
@@ -196,9 +220,11 @@ export const QuizAttemptPage = () => {
               )}
             </div>
           ))}
-          <button type="submit" className="btn-primary" disabled={isSubmitting}>
-            {isSubmitting ? 'กำลังตรวจคำตอบ...' : 'ส่งคำตอบ'}
-          </button>
+          <div className="sticky bottom-[calc(96px+env(safe-area-inset-bottom,0px))] z-20 -mx-1 rounded-[1.75rem] bg-[color:rgba(248,250,252,0.92)] px-1 py-3 backdrop-blur sm:bottom-4 sm:bg-transparent sm:px-0 sm:py-0">
+            <button type="submit" className="btn-primary w-full sm:w-auto" disabled={isSubmitting}>
+              {isSubmitting ? 'กำลังตรวจคำตอบ...' : 'ส่งคำตอบ'}
+            </button>
+          </div>
         </form>
       </div>
 
@@ -213,7 +239,7 @@ export const QuizAttemptPage = () => {
                   {result.total > 0 ? `(${Math.round((result.score / result.total) * 100)}%)` : ''}
                 </p>
               </div>
-              <button onClick={() => setShowModal(false)} className="rounded-full bg-primary/10 px-3 py-1 text-sm text-primary hover:bg-primary/20">
+              <button onClick={closeResultModal} className="rounded-full bg-primary/10 px-3 py-1 text-sm text-primary hover:bg-primary/20">
                 ปิด
               </button>
             </div>

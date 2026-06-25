@@ -382,7 +382,7 @@ export const StudyStoragePage = () => {
           <div className="min-w-0">
             <p className="text-[10px] font-bold uppercase tracking-[0.32em] text-[color:var(--accent-ink)]">My Storage</p>
             <h1 className="mt-1.5 text-[1.8rem] font-bold leading-tight text-[color:var(--text)]">กระเป๋าเก็บไฟล์</h1>
-            <p className="mt-2 max-w-lg text-sm leading-6 text-[color:var(--muted)]">จัดการไฟล์แนบทั้งหมดของคุณที่เชื่อมโยงกับบันทึกการเรียน</p>
+           
           </div>
           <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[color:rgba(var(--accent-rgb),0.10)] text-[color:var(--accent-ink)] shadow-soft ring-1 ring-[color:rgba(var(--accent-rgb),0.16)]">
             <svg viewBox="0 0 24 24" className="h-[18px] w-[18px]" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

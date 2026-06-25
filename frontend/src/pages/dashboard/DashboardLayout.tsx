@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type SyntheticEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { House, BookOpen, ClipboardText, CalendarBlank, Target, Bell, Microphone, Suitcase, Robot, FileText, User, Archive, DotsThree, Sun, Moon } from 'phosphor-react';
+import { House, BookOpen, ClipboardText, CalendarBlank, Target, Bell, Microphone, Suitcase, Robot, FileText, User, Archive, DotsThree, Sun, Moon, Palette, X } from 'phosphor-react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { api, assetBaseURL } from '../../services/api';
@@ -79,6 +79,8 @@ const backgroundThemes = [
     lightPreview: '#f8fafc'
   }
 ];
+
+const themeSwatches = ['#f472b6', '#fb7185', '#fdba74', '#facc15', '#bef264', '#5eead4', '#67e8f9', '#60a5fa', '#818cf8', '#a78bfa'];
 
 const ThemeModeSwitch = ({
   theme,
@@ -500,6 +502,40 @@ const hslToHex = (hue: number, saturation = 82, lightness = 56) => {
   return `#${[r, g, b].map(channel => Math.round((channel + m) * 255).toString(16).padStart(2, '0')).join('')}`;
 };
 
+const hexToHsl = (hex: string) => {
+  const normalized = normalizeHexColor(hex).slice(1);
+  const value = Number.parseInt(normalized, 16);
+  const r = ((value >> 16) & 255) / 255;
+  const g = ((value >> 8) & 255) / 255;
+  const b = (value & 255) / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const delta = max - min;
+  let hue = 0;
+  let saturation = 0;
+  const lightness = (max + min) / 2;
+  if (delta !== 0) {
+    saturation = delta / (1 - Math.abs(2 * lightness - 1));
+    switch (max) {
+      case r:
+        hue = 60 * (((g - b) / delta) % 6);
+        break;
+      case g:
+        hue = 60 * ((b - r) / delta + 2);
+        break;
+      default:
+        hue = 60 * ((r - g) / delta + 4);
+        break;
+    }
+  }
+  if (hue < 0) hue += 360;
+  return {
+    hue,
+    saturation: Math.round(saturation * 100),
+    lightness: Math.round(lightness * 100),
+  };
+};
+
 const resolveProfileUrl = (value?: string | null, fallbackBase?: string) => {
   const raw = value?.trim();
   if (!raw) return null;
@@ -530,6 +566,20 @@ const resolveProfileUrl = (value?: string | null, fallbackBase?: string) => {
   if (!base) return raw;
   const normalized = raw.startsWith('/') ? raw : `/${raw}`;
   return `${base}${normalized}`;
+};
+
+const buildProfileImageCandidates = (values: Array<string | null | undefined>, fallbackBase?: string) => {
+  const seen = new Set<string>();
+  const candidates: string[] = [];
+
+  values.forEach(value => {
+    const resolved = resolveProfileUrl(value, fallbackBase);
+    if (!resolved || seen.has(resolved)) return;
+    seen.add(resolved);
+    candidates.push(resolved);
+  });
+
+  return candidates;
 };
 
 const getSeenNotificationKeyStorage = (userId?: number | null) =>
@@ -1126,11 +1176,22 @@ export const DashboardLayout = () => {
     return match?.label ?? 'Home';
   }, [location.pathname, navItems]);
   const isAiPage = location.pathname.startsWith('/ai-assistant');
-  const profileImageUrl = useMemo(
-    () => resolveProfileUrl(user?.profile_pic ?? user?.avatar, assetBaseURL || api.defaults.baseURL),
+  const profileImageCandidates = useMemo(
+    () => buildProfileImageCandidates([user?.profile_pic, user?.avatar], assetBaseURL || api.defaults.baseURL),
     [user?.profile_pic, user?.avatar]
   );
+  const [profileImageIndex, setProfileImageIndex] = useState(0);
+  useEffect(() => {
+    setProfileImageIndex(0);
+  }, [profileImageCandidates]);
+  const profileImageUrl = profileImageCandidates[profileImageIndex] ?? null;
+  const handleProfileImageError = () => {
+    setProfileImageIndex(current =>
+      current + 1 < profileImageCandidates.length ? current + 1 : profileImageCandidates.length
+    );
+  };
   const customAccentHue = useMemo(() => hexToHue(customAccent), [customAccent]);
+  const customAccentHsl = useMemo(() => hexToHsl(customAccent), [customAccent]);
   const customAccentMarker = useMemo(() => {
     const angle = ((customAccentHue - 90) * Math.PI) / 180;
     return {
@@ -1138,6 +1199,11 @@ export const DashboardLayout = () => {
       top: `${50 + Math.sin(angle) * 42}%`,
     };
   }, [customAccentHue]);
+  const customAccentSliderLeft = useMemo(() => `${Math.max(0, Math.min(100, (customAccentHue / 360) * 100))}%`, [customAccentHue]);
+  const customAccentLightnessLeft = useMemo(
+    () => `${Math.max(0, Math.min(100, customAccentHsl.lightness))}%`,
+    [customAccentHsl.lightness]
+  );
   const updateCustomAccentFromPointer = (event: ReactPointerEvent<HTMLDivElement>) => {
     const wheel = event.currentTarget;
     const rect = wheel.getBoundingClientRect();
@@ -1148,6 +1214,22 @@ export const DashboardLayout = () => {
     const angle = Math.atan2(event.clientY - centerY, event.clientX - centerX) * (180 / Math.PI);
     const hue = (angle + 90 + 360) % 360;
     setCustomAccent(hslToHex(hue));
+    setAccentThemeId('custom');
+  };
+  const updateCustomAccentFromSlider = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const bar = event.currentTarget;
+    const rect = bar.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
+    setCustomAccent(hslToHex(ratio * 360));
+    setAccentThemeId('custom');
+  };
+  const updateCustomAccentLightness = (lightness: number) => {
+    const nextLightness = Math.max(18, Math.min(86, lightness));
+    setCustomAccent(hslToHex(customAccentHsl.hue, customAccentHsl.saturation || 85, nextLightness));
+    setAccentThemeId('custom');
+  };
+  const applyCustomAccent = (value: string) => {
+    setCustomAccent(normalizeHexColor(value, customAccent));
     setAccentThemeId('custom');
   };
   return (
@@ -1308,6 +1390,7 @@ export const DashboardLayout = () => {
                     alt="โปรไฟล์"
                     className="h-full w-full object-cover"
                     referrerPolicy="no-referrer"
+                    onError={handleProfileImageError}
                   />
                 ) : (
                   <span className={`text-sm font-semibold ${theme === 'dark' ? 'text-white/85' : 'text-slate-700'}`}>
@@ -1388,80 +1471,187 @@ export const DashboardLayout = () => {
                     </button>
                     {desktopThemeOpen && (
                       <div
-                        className={`absolute right-0 top-full z-40 mt-3 w-[min(88vw,25rem)] rounded-[2rem] border p-5 shadow-[0_24px_60px_rgba(0,0,0,0.28)] ${
-                          theme === 'dark'
-                            ? 'border-white/10 bg-slate-900 text-white'
-                            : 'border-[color:var(--border)] bg-[color:var(--surface)] text-[color:var(--text)]'
-                        }`}
-                        role="dialog"
+                        className="fixed inset-0 z-[60] flex items-center justify-center bg-[radial-gradient(circle_at_top_left,rgba(236,72,153,0.18),transparent_30%),radial-gradient(circle_at_top_right,rgba(96,165,250,0.18),transparent_28%),linear-gradient(180deg,rgba(255,255,255,0.58),rgba(255,255,255,0.72))] p-4 backdrop-blur-md"
+                        onClick={() => setDesktopThemeOpen(false)}
+                        role="presentation"
                       >
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <p className={`text-xl font-extrabold tracking-tight ${theme === 'dark' ? 'text-white' : 'text-slate-900'}`}>
-                              เลือกสีธีม
-                            </p>
-                            <p className={`mt-1 text-xs ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>
-                              คลิกหรือลากบนวงล้อเพื่อเลือกสี
-                            </p>
-                          </div>
-                          <span
-                            className="h-5 w-5 shrink-0 rounded-full border border-white/50 shadow-sm"
-                            style={{ background: activeAccentTheme.accent }}
-                          />
-                        </div>
-
-                        <div className="mt-5 flex flex-col items-center">
-                          <div
-                            role="slider"
-                            aria-label="เลือกสีธีม"
-                            aria-valuetext={activeAccentTheme.accent.toUpperCase()}
-                            tabIndex={0}
-                            onPointerDown={event => {
-                              event.currentTarget.setPointerCapture(event.pointerId);
-                              updateCustomAccentFromPointer(event);
-                            }}
-                            onPointerMove={event => {
-                              if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-                                updateCustomAccentFromPointer(event);
-                              }
-                            }}
-                            className="relative h-56 w-56 touch-none rounded-full border-4 shadow-sm"
-                            style={{
-                              borderColor: theme === 'dark' ? 'rgba(255,255,255,0.16)' : '#ffffff',
-                              background: 'conic-gradient(from 0deg,#ff2a16,#ff9700,#ffe600,#9cff19,#20c936,#12c5c8,#258ff3,#5930d8,#9729dc,#d12183,#ff2a16)',
-                            }}
-                          >
-                            <span
-                              className="pointer-events-none absolute h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white shadow-sm"
-                              style={{ ...customAccentMarker, background: customAccent }}
-                            />
-                            <span
-                              className="pointer-events-none absolute left-1/2 top-1/2 h-[34%] w-[34%] -translate-x-1/2 -translate-y-1/2 rounded-full border-4 border-white shadow-sm"
-                              style={{ background: activeAccentTheme.accent }}
-                            />
-                          </div>
-
-                          <label className="mt-4 flex cursor-pointer flex-col items-center gap-2">
-                            <span
-                              className="relative flex h-9 w-9 items-center justify-center rounded-full border-2 border-white shadow-sm"
-                              style={{ background: activeAccentTheme.accent }}
+                        <div
+                          className="relative w-[min(92vw,64rem)] overflow-hidden rounded-[2.5rem] border border-white/80 bg-[linear-gradient(135deg,rgba(255,255,255,0.96),rgba(255,255,255,0.88))] px-5 py-5 shadow-[0_34px_90px_rgba(114,95,255,0.18)] sm:px-7 sm:py-6"
+                          role="dialog"
+                          aria-modal="true"
+                          aria-label="เลือกสีธีม"
+                          onClick={event => event.stopPropagation()}
+                        >
+                          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(236,72,153,0.08),transparent_24%),radial-gradient(circle_at_80%_20%,rgba(96,165,250,0.08),transparent_24%),radial-gradient(circle_at_15%_80%,rgba(168,85,247,0.08),transparent_22%),radial-gradient(circle_at_85%_82%,rgba(59,130,246,0.08),transparent_22%)]" />
+                          <div className="pointer-events-none absolute inset-x-0 top-0 h-1 bg-[linear-gradient(90deg,#f6a0d7,#c4d8ff,#c6e6ff)] opacity-90" />
+                          <div className="relative flex items-start justify-between gap-4">
+                            <div className="flex items-start gap-3 sm:gap-4">
+                              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-violet-500 shadow-[0_14px_26px_rgba(156,105,255,0.16)] ring-1 ring-violet-100 sm:h-14 sm:w-14">
+                                <Palette size={24} weight="duotone" />
+                              </div>
+                              <div className="pt-0.5">
+                                <p className="text-[1.7rem] font-extrabold leading-none tracking-tight text-slate-800 sm:text-[2.15rem]">
+                                  เลือกสี
+                                </p>
+                                <p className="mt-1.5 max-w-[34rem] text-xs text-slate-500 sm:text-sm">
+                                  คลิกหรือลากบนวงล้อเพื่อเลือกสีที่ต้องการ
+                                </p>
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setDesktopThemeOpen(false)}
+                              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white text-violet-500 shadow-[0_12px_24px_rgba(156,105,255,0.15)] ring-1 ring-violet-100 transition hover:scale-105 hover:text-violet-600 sm:h-12 sm:w-12"
+                              aria-label="ปิด"
                             >
-                              <span className="h-2 w-2 rounded-full bg-white/65" />
-                            </span>
-                            <input
-                              type="color"
-                              value={activeAccentTheme.accent}
-                              onChange={event => {
-                                setCustomAccent(normalizeHexColor(event.target.value));
-                                setAccentThemeId('custom');
-                              }}
-                              className="sr-only"
-                              aria-label="ปรับสีแบบละเอียด"
-                            />
-                            <span className={`font-mono text-sm font-semibold uppercase ${theme === 'dark' ? 'text-slate-300' : 'text-slate-500'}`}>
-                              {activeAccentTheme.accent}
-                            </span>
-                          </label>
+                              <X size={24} weight="bold" />
+                            </button>
+                          </div>
+
+                          <div className="relative mt-6 grid gap-6 lg:grid-cols-[minmax(0,1.05fr)_minmax(17rem,0.82fr)] lg:items-center lg:gap-10">
+                            <div className="relative mx-auto flex w-full max-w-[34rem] items-center justify-center">
+                              <div className="absolute inset-0 rounded-full bg-[radial-gradient(circle,rgba(255,255,255,0.92),rgba(255,255,255,0.14)_68%,transparent_74%)] blur-[8px]" />
+                              <div
+                                className="relative aspect-square w-full max-w-[29rem] touch-none rounded-full border-[6px] border-white bg-[conic-gradient(from_0deg,#ff3b3b,#ff8a00,#ffe600,#b6ff3b,#19d36b,#17c7df,#1f8eff,#6b4bf5,#b13df6,#ff3b3b)] shadow-[0_20px_42px_rgba(89,72,194,0.16)]"
+                                role="slider"
+                                aria-label="เลือกสีธีม"
+                                aria-valuetext={activeAccentTheme.accent.toUpperCase()}
+                                tabIndex={0}
+                                onPointerDown={event => {
+                                  event.currentTarget.setPointerCapture(event.pointerId);
+                                  updateCustomAccentFromPointer(event);
+                                }}
+                                onPointerMove={event => {
+                                  if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+                                    updateCustomAccentFromPointer(event);
+                                  }
+                                }}
+                                style={{
+                                  boxShadow: '0 20px 54px rgba(70, 54, 160, 0.16), inset 0 0 0 1px rgba(255,255,255,0.35)'
+                                }}
+                              >
+                                <span
+                                  className="pointer-events-none absolute h-6 w-6 -translate-x-1/2 -translate-y-1/2 rounded-full border-[4px] border-white shadow-[0_8px_18px_rgba(79,70,229,0.25)]"
+                                  style={{ ...customAccentMarker, background: customAccent }}
+                                />
+                              </div>
+                            </div>
+
+                            <div className="flex flex-col justify-center gap-5">
+                              <div>
+                                <p className="text-xl font-bold text-slate-800">สีที่เลือก</p>
+                                <label className="mt-4 block cursor-pointer">
+                                  <input
+                                    type="color"
+                                    value={activeAccentTheme.accent}
+                                    onChange={event => applyCustomAccent(event.target.value)}
+                                    className="sr-only"
+                                    aria-label="เลือกสีแบบละเอียด"
+                                  />
+                                  <div
+                                    className="relative h-40 overflow-hidden rounded-[1.6rem] border border-white/80 shadow-[0_16px_30px_rgba(122,102,220,0.16)]"
+                                    style={{
+                                      background: `linear-gradient(135deg, ${activeAccentTheme.accent} 0%, ${activeAccentTheme.accentStrong} 56%, ${activeAccentTheme.accentSoft} 100%)`
+                                    }}
+                                  >
+                                    <div className="absolute inset-0 bg-[radial-gradient(circle_at_25%_30%,rgba(255,255,255,0.22),transparent_28%),radial-gradient(circle_at_78%_32%,rgba(255,255,255,0.18),transparent_16%),radial-gradient(circle_at_70%_70%,rgba(255,255,255,0.14),transparent_22%)]" />
+                                    <div className="absolute inset-x-4 bottom-4 rounded-[1rem] bg-white/85 px-4 py-2.5 text-center shadow-[0_10px_24px_rgba(148,163,184,0.12)] backdrop-blur-sm">
+                                      <p className="text-xs font-medium text-slate-500">แตะเพื่อเลือกสีตรงนี้ได้</p>
+                                      <p className="font-mono text-sm font-semibold text-slate-700">
+                                        {activeAccentTheme.accent.toUpperCase()}
+                                      </p>
+                                    </div>
+                                  </div>
+                                </label>
+
+                                <div className="mt-3 rounded-[1.1rem] border border-white/80 bg-white/85 px-4 py-2.5 shadow-[0_10px_24px_rgba(148,163,184,0.12)]">
+                                  <div className="mb-2 flex items-center justify-between gap-3">
+                                    <p className="text-xs font-medium text-slate-500">โทนสีอ่อน</p>
+                                    <p className="font-mono text-xs font-semibold text-slate-600">{customAccentHsl.lightness}%</p>
+                                  </div>
+                                  <input
+                                    type="range"
+                                    min={18}
+                                    max={86}
+                                    value={customAccentHsl.lightness}
+                                    onChange={event => updateCustomAccentLightness(Number(event.target.value))}
+                                  className="h-2.5 w-full cursor-pointer appearance-none rounded-full"
+                                    style={{
+                                      background: `linear-gradient(90deg, ${shadeColor(customAccent, -38)}, ${customAccent}, ${shadeColor(customAccent, 28)})`
+                                    }}
+                                    aria-label="ปรับโทนสีอ่อน"
+                                  />
+                                </div>
+                                <div className="mt-3 flex items-center gap-3 rounded-[1.1rem] border border-white/80 bg-white/85 px-3 py-2 shadow-[0_10px_24px_rgba(148,163,184,0.12)]">
+                                  <input
+                                    type="color"
+                                    value={activeAccentTheme.accent}
+                                    onChange={event => applyCustomAccent(event.target.value)}
+                                    className="h-10 w-10 cursor-pointer rounded-full border-0 bg-transparent p-0"
+                                    aria-label="เลือกสีแบบละเอียด"
+                                  />
+                                  <div className="min-w-0 flex-1">
+                                    <p className="text-xs font-medium text-slate-500">เลือกสีได้ทุกเฉด</p>
+                                    <p className="truncate font-mono text-sm font-semibold text-slate-700">
+                                      {activeAccentTheme.accent.toUpperCase()}
+                                    </p>
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-4">
+                              <div className="h-px flex-1 bg-[linear-gradient(90deg,transparent,rgba(148,163,184,0.25),transparent)]" />
+                                <span className="text-2xl leading-none text-violet-500">✦</span>
+                                <div className="h-px flex-1 bg-[linear-gradient(90deg,transparent,rgba(148,163,184,0.25),transparent)]" />
+                              </div>
+
+                              <div>
+                                <p className="text-xl font-bold text-slate-800">สีแนะนำ</p>
+                                <div className="mt-4 grid grid-cols-5 gap-2.5">
+                                  {themeSwatches.map(color => (
+                                  <button
+                                      key={color}
+                                      type="button"
+                                      onClick={() => {
+                                        applyCustomAccent(color);
+                                      }}
+                                      className="h-12 rounded-2xl border border-white/70 shadow-[0_10px_20px_rgba(148,163,184,0.16)] transition hover:-translate-y-0.5 hover:scale-[1.02]"
+                                      style={{ background: color }}
+                                      aria-label={`เลือกสี ${color}`}
+                                    />
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="relative mt-6 rounded-[1.6rem] border border-white/80 bg-white/75 px-4 py-3 shadow-[0_14px_26px_rgba(148,163,184,0.14)] backdrop-blur-sm sm:px-5">
+                            <div className="flex items-center gap-4">
+                              <span className="text-2xl leading-none text-violet-500">☼</span>
+                              <div
+                                className="relative h-3.5 flex-1 cursor-pointer rounded-full bg-[linear-gradient(90deg,#ff4d7d,#ff9f43,#ffe84d,#92f25f,#39d3cb,#3c8cff,#7c5cff,#ff6fd8)]"
+                                role="slider"
+                                aria-label="ปรับสีธีม"
+                                aria-valuetext={activeAccentTheme.accent.toUpperCase()}
+                                tabIndex={0}
+                                onPointerDown={event => {
+                                  event.currentTarget.setPointerCapture(event.pointerId);
+                                  updateCustomAccentFromSlider(event);
+                                }}
+                                onPointerMove={event => {
+                                  if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+                                    updateCustomAccentFromSlider(event);
+                                  }
+                                }}
+                                >
+                                <span
+                                  className="pointer-events-none absolute top-1/2 h-6 w-6 -translate-x-1/2 -translate-y-1/2 rounded-full border-[4px] border-white bg-violet-500 shadow-[0_10px_20px_rgba(124,58,237,0.35)]"
+                                  style={{ left: customAccentSliderLeft }}
+                                />
+                              </div>
+                              <span className="text-2xl leading-none text-violet-500">☼</span>
+                            </div>
+                          </div>
                         </div>
                       </div>
                     )}
@@ -1624,6 +1814,7 @@ export const DashboardLayout = () => {
                           alt="โปรไฟล์"
                           className="h-full w-full object-cover"
                           referrerPolicy="no-referrer"
+                          onError={handleProfileImageError}
                         />
                       ) : (
                         <span>{user?.name?.charAt(0) ?? 'U'}</span>
@@ -1924,38 +2115,71 @@ export const DashboardLayout = () => {
                             borderColor: theme === 'dark' ? 'rgba(255,255,255,0.16)' : '#ffffff',
                             background: 'conic-gradient(from 0deg,#ff2a16,#ff9700,#ffe600,#9cff19,#20c936,#12c5c8,#258ff3,#5930d8,#9729dc,#d12183,#ff2a16)',
                           }}
-                        >
+                          >
                           <span
-                            className="pointer-events-none absolute h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white shadow-sm"
+                            className="pointer-events-none absolute h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white shadow-sm"
                             style={{ ...customAccentMarker, background: customAccent }}
-                          />
-                          <span
-                            className="pointer-events-none absolute left-1/2 top-1/2 h-[34%] w-[34%] -translate-x-1/2 -translate-y-1/2 rounded-full border-4 border-white shadow-sm"
-                            style={{ background: activeAccentTheme.accent }}
                           />
                         </div>
 
-                        <label className="mt-5 flex cursor-pointer flex-col items-center gap-2">
-                          <span
-                            className="relative flex h-9 w-9 items-center justify-center rounded-full border-2 border-white shadow-sm"
-                            style={{ background: activeAccentTheme.accent }}
-                          >
-                            <span className="h-2 w-2 rounded-full bg-white/65" />
-                          </span>
+                        <label className="mt-5 block w-full cursor-pointer">
                           <input
                             type="color"
                             value={activeAccentTheme.accent}
-                            onChange={event => {
-                              setCustomAccent(normalizeHexColor(event.target.value));
-                              setAccentThemeId('custom');
-                            }}
+                            onChange={event => applyCustomAccent(event.target.value)}
                             className="sr-only"
-                            aria-label="ปรับสีแบบละเอียด"
+                            aria-label="เลือกสีแบบละเอียด"
                           />
-                          <span className={`font-mono text-sm font-semibold uppercase ${theme === 'dark' ? 'text-slate-300' : 'text-slate-500'}`}>
-                            {activeAccentTheme.accent}
-                          </span>
+                          <div
+                            className="relative h-28 overflow-hidden rounded-[1.5rem] border border-white/80 shadow-[0_12px_24px_rgba(148,163,184,0.12)]"
+                            style={{
+                              background: `linear-gradient(135deg, ${activeAccentTheme.accent} 0%, ${activeAccentTheme.accentStrong} 56%, ${activeAccentTheme.accentSoft} 100%)`
+                            }}
+                          >
+                            <div className="absolute inset-0 bg-[radial-gradient(circle_at_25%_30%,rgba(255,255,255,0.22),transparent_28%)]" />
+                            <div className="absolute inset-x-4 bottom-3 rounded-[1rem] bg-white/85 px-3 py-2 text-center shadow-[0_10px_18px_rgba(148,163,184,0.12)] backdrop-blur-sm">
+                              <p className="text-[10px] font-medium text-slate-500">แตะเพื่อเลือกสีตรงนี้ได้</p>
+                              <p className="font-mono text-xs font-semibold text-slate-700">
+                                {activeAccentTheme.accent.toUpperCase()}
+                              </p>
+                            </div>
+                          </div>
                         </label>
+
+                        <div className="mt-4 w-full rounded-[1.2rem] border border-white/80 bg-white/85 px-4 py-3 shadow-[0_10px_24px_rgba(148,163,184,0.12)]">
+                          <div className="mb-2 flex items-center justify-between gap-3">
+                            <p className="text-xs font-medium text-slate-500">โทนสีอ่อน</p>
+                            <p className="font-mono text-xs font-semibold text-slate-600">{customAccentHsl.lightness}%</p>
+                          </div>
+                          <input
+                            type="range"
+                            min={18}
+                            max={86}
+                            value={customAccentHsl.lightness}
+                            onChange={event => updateCustomAccentLightness(Number(event.target.value))}
+                            className="h-3 w-full cursor-pointer appearance-none rounded-full"
+                            style={{
+                              background: `linear-gradient(90deg, ${shadeColor(customAccent, -38)}, ${customAccent}, ${shadeColor(customAccent, 28)})`
+                            }}
+                            aria-label="ปรับโทนสีอ่อน"
+                          />
+                        </div>
+
+                        <div className="mt-4 flex w-full items-center gap-3 rounded-[1.2rem] border border-white/80 bg-white/85 px-3 py-2 shadow-[0_10px_24px_rgba(148,163,184,0.12)]">
+                          <input
+                            type="color"
+                            value={activeAccentTheme.accent}
+                            onChange={event => applyCustomAccent(event.target.value)}
+                            className="h-10 w-10 cursor-pointer rounded-full border-0 bg-transparent p-0"
+                            aria-label="เลือกสีแบบละเอียด"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <p className="text-xs font-medium text-slate-500">เลือกสีได้ทุกเฉด</p>
+                            <p className="truncate font-mono text-sm font-semibold text-slate-700">
+                              {activeAccentTheme.accent.toUpperCase()}
+                            </p>
+                          </div>
+                        </div>
 
                       </div>
                     </div>
@@ -2061,9 +2285,13 @@ export const DashboardLayout = () => {
             const activeStrongColor = activeAccentTheme.accentStrong;
             const navItemColor = '#ffffff';
             const notchColor = theme === 'dark' ? '#020617' : '#f8fafc';
-            const pillHeight = 64;
-            const wrapperHeight = 100;
+            const pillHeight = 68;
+            const wrapperHeight = 108;
             const pillTop = wrapperHeight - pillHeight; // 36px headroom for the raised icon
+            const activeIconSize = 54;
+            const inactiveIconSize = 26;
+            const activeIconTop = pillTop - 30;
+            const inactiveIconTop = pillTop + 7;
 
             return (
               <nav className="mobile-bottom-nav pointer-events-auto mx-auto w-full max-w-[460px]">
@@ -2115,10 +2343,11 @@ export const DashboardLayout = () => {
                               className="absolute left-1/2 flex items-center justify-center rounded-full transition-all duration-[450ms] ease-[cubic-bezier(0.34,1.56,0.64,1)]"
                               style={{
                                 transform: 'translateX(-50%)',
-                                top: isActive ? `${pillTop - 20}px` : `${pillTop + 6}px`,
-                                height: isActive ? '50px' : '26px',
-                                width: isActive ? '50px' : '26px',
+                                top: isActive ? `${activeIconTop}px` : `${inactiveIconTop}px`,
+                                height: isActive ? `${activeIconSize}px` : `${inactiveIconSize}px`,
+                                width: isActive ? `${activeIconSize}px` : `${inactiveIconSize}px`,
                                 backgroundColor: isActive ? activeColor : 'transparent',
+                                zIndex: 1,
                                 boxShadow: isActive
                                   ? `0 7px 20px rgba(${activeAccentTheme.accentRgb},0.36)`
                                   : 'none'
@@ -2135,7 +2364,7 @@ export const DashboardLayout = () => {
                             <span
                               className="mobile-bottom-nav__label pointer-events-none absolute inset-x-0 truncate px-1 text-center text-[11px] font-bold leading-none transition-colors duration-300"
                               style={{
-                                top: `${pillTop + 35}px`,
+                                bottom: '10px',
                                 color: navItemColor
                               }}
                             >
